@@ -1,8 +1,15 @@
 /**
  * Loot & Cultivation Utilities
  */
-import { LootItem } from "../../modules/music/stores/library";
-
+export interface LootItem {
+    id: string;
+    name: string;
+    type: string;
+    rarity: 'common' | 'rare' | 'epic' | 'legendary' | 'mythic';
+    description: string;
+    icon?: string;
+    quantity: number;
+}
 export interface LootDefinition {
     itemId: string;
     name: string;
