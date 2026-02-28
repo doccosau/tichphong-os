@@ -34,7 +34,7 @@ setPersistence(auth, indexedDBLocalPersistence)
         console.log('[Firebase] IndexedDB not available, falling back to localStorage');
         return setPersistence(auth, browserLocalPersistence);
     })
-    .catch((error) => {
+    .catch((error: any) => {
         console.error("Firebase Persistence Error:", error);
     });
 
