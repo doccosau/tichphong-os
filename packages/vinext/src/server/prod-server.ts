@@ -28,6 +28,7 @@ import type { RequestContext } from "../config/config-matchers.js";
 import { IMAGE_OPTIMIZATION_PATH, IMAGE_CONTENT_SECURITY_POLICY, parseImageParams, isSafeImageContentType, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "./image-optimization.js";
 import { normalizePath } from "./normalize-path.js";
 import { computeLazyChunks } from "../index.js";
+import { TichPhongSystemKernel } from "../tichphong-os/core/kernel.js";
 
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
 function readNodeStream(req: IncomingMessage): ReadableStream<Uint8Array> {
@@ -407,6 +408,10 @@ async function sendWebResponse(
  * Pages Router (dist/server/entry.js) and configures the appropriate handler.
  */
 export async function startProdServer(options: ProdServerOptions = {}) {
+  console.log(`\x1b[36m[TichPhong OS]\x1b[0m Booting System Kernel in Production Mode...`);
+  const kernel = TichPhongSystemKernel.getInstance();
+  console.log(`\x1b[36m[TichPhong OS]\x1b[0m Kernel ready. Igniting Vinext Render Engine...`);
+
   const {
     port = process.env.PORT ? parseInt(process.env.PORT) : 3000,
     host = "0.0.0.0",
@@ -425,7 +430,7 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   const isAppRouter = fs.existsSync(rscEntryPath);
 
   if (!isAppRouter && !fs.existsSync(serverEntryPath)) {
-    console.error(`[vinext] No build output found in ${outDir}`);
+    console.error(`[\x1b[36mTichPhong OS\x1b[0m] No build output found in ${outDir}`);
     console.error("Run `vinext build` first.");
     process.exit(1);
   }
@@ -471,7 +476,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   const rscHandler: (request: Request) => Promise<Response> = rscModule.default;
 
   if (typeof rscHandler !== "function") {
-    console.error("[vinext] RSC entry does not export a default handler function");
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] RSC entry does not export a default handler function");
     process.exit(1);
   }
 
@@ -544,7 +549,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       // Stream the Web Response back to the Node.js response
       await sendWebResponse(response, req, res, compress);
     } catch (e) {
-      console.error("[vinext] Server error:", e);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Server error:", e);
       if (!res.headersSent) {
         res.writeHead(500);
         res.end("Internal Server Error");
@@ -556,7 +561,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      console.log(`[vinext] Production server running at http://${host}:${actualPort}`);
+      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${host}:${actualPort}`);
       resolve();
     });
   });
@@ -929,7 +934,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       sendCompressed(req, res, responseBody, ct, middlewareRewriteStatus ?? response.status, responseHeaders, compress);
     } catch (e) {
-      console.error("[vinext] Server error:", e);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Server error:", e);
       res.writeHead(500);
       res.end("Internal Server Error");
     }
@@ -939,7 +944,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
     server.listen(port, host, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      console.log(`[vinext] Production server running at http://${host}:${actualPort}`);
+      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${host}:${actualPort}`);
       resolve();
     });
   });

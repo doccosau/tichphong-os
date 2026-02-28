@@ -19,10 +19,10 @@ import { getLayoutSegmentContext } from "next/navigation";
  * passing the number of URL segments consumed up to that layout's level.
  */
 export function LayoutSegmentProvider({
-  depth,
+  segments,
   children,
 }: {
-  depth: number;
+  segments: string[];
   children: ReactNode;
 }) {
   const ctx = getLayoutSegmentContext();
@@ -30,5 +30,5 @@ export function LayoutSegmentProvider({
     // Fallback: no context available (shouldn't happen in SSR/Browser)
     return children as any;
   }
-  return createElement(ctx.Provider, { value: depth }, children);
+  return createElement(ctx.Provider, { value: segments }, children);
 }

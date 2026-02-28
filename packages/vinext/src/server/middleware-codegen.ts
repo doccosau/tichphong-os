@@ -82,7 +82,7 @@ function __isSafeRegex(pattern) {
 }
 function __safeRegExp(pattern, flags) {
   if (!__isSafeRegex(pattern)) {
-    console.warn("[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
+    console.warn("[\x1b[36mTichPhong OS\x1b[0m] Ignoring potentially unsafe regex pattern (ReDoS risk): " + pattern);
     return null;
   }
   try { return new RegExp(pattern, flags); } catch { return null; }

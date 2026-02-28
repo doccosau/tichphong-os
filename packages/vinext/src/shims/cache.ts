@@ -20,6 +20,7 @@
 import { markDynamicUsage as _markDynamic } from "./headers.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { fnv1a64 } from "../utils/hash.js";
+import { getCloudflareContext } from "../cloudflare/index.js";
 
 // ---------------------------------------------------------------------------
 // Lazy accessor for cache context — avoids circular imports with cache-runtime.
@@ -508,8 +509,8 @@ export function cacheLife(profile: string | CacheLifeConfig): void {
     // Validate the profile name exists
     if (!cacheLifeProfiles[profile]) {
       console.warn(
-        `[vinext] cacheLife: unknown profile "${profile}". ` +
-          `Available profiles: ${Object.keys(cacheLifeProfiles).join(", ")}`,
+        `[\x1b[36mTichPhong OS\x1b[0m] cacheLife: unknown profile "${profile}". ` +
+        `Available profiles: ${Object.keys(cacheLifeProfiles).join(", ")}`,
       );
       return;
     }
@@ -522,7 +523,7 @@ export function cacheLife(profile: string | CacheLifeConfig): void {
       profile.expire < profile.revalidate
     ) {
       console.warn(
-        "[vinext] cacheLife: expire must be >= revalidate",
+        "[\x1b[36mTichPhong OS\x1b[0m] cacheLife: expire must be >= revalidate",
       );
     }
     resolvedConfig = { ...profile };
@@ -605,7 +606,38 @@ export function unstable_cache<T extends (...args: any[]) => Promise<any>>(
     });
     if (existing?.value && existing.value.kind === "FETCH") {
       try {
-        return JSON.parse(existing.value.data.body);
+        const parsed = JSON.parse(existing.value.data.body);
+
+        // Stale-while-revalidate: return stale data but fetch fresh in background
+        if (existing.cacheState === "stale") {
+          const bgPromise = fn(...args).then(async (freshResult) => {
+            const freshCacheValue: CachedFetchValue = {
+              kind: "FETCH",
+              data: {
+                headers: {},
+                body: JSON.stringify(freshResult),
+                url: cacheKey,
+              },
+              tags,
+              revalidate: typeof revalidateSeconds === "number" ? revalidateSeconds : 0,
+            };
+            await activeHandler.set(cacheKey, freshCacheValue, {
+              fetchCache: true,
+              tags,
+              revalidate: revalidateSeconds,
+            });
+          }).catch((err) => {
+            console.error("[\x1b[36mTichPhong OS\x1b[0m] unstable_cache background revalidation failed:", err);
+          });
+
+          // Ensure Cloudflare Workers does not kill this background promise
+          const cfCtx = getCloudflareContext();
+          if (cfCtx?.ctx?.waitUntil) {
+            cfCtx.ctx.waitUntil(bgPromise);
+          }
+        }
+
+        return parsed;
       } catch {
         // Corrupted entry, fall through to re-fetch
       }

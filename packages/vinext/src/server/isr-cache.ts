@@ -81,7 +81,7 @@ export function triggerBackgroundRegeneration(
 
   const promise = renderFn()
     .catch((err) => {
-      console.error(`[vinext] ISR background regeneration failed for ${key}:`, err);
+      console.error(`[\x1b[36mTichPhong OS\x1b[0m] ISR background regeneration failed for ${key}:`, err);
     })
     .finally(() => {
       pendingRegenerations.delete(key);

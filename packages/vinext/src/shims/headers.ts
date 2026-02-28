@@ -260,7 +260,7 @@ function getDraftSecret(): string {
   const secret = process.env.__VINEXT_DRAFT_SECRET;
   if (!secret) {
     throw new Error(
-      "[vinext] __VINEXT_DRAFT_SECRET is not defined. " +
+      "[\x1b[36mTichPhong OS\x1b[0m] __VINEXT_DRAFT_SECRET is not defined. " +
         "This should be set by the Vite plugin at build time.",
     );
   }

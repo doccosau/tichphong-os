@@ -216,6 +216,7 @@ import { setHeadersContext, headersContextFromRequest, getDraftModeCookieHeader,
 import { NextRequest } from "next/server";
 import { ErrorBoundary, NotFoundBoundary } from "vinext/error-boundary";
 import { LayoutSegmentProvider } from "vinext/layout-segment-context";
+import { resolveLayoutSegments } from "vinext/routing/app-router";
 import { MetadataHead, mergeMetadata, resolveModuleMetadata, ViewportHead, mergeViewport, resolveModuleViewport } from "vinext/metadata";
 ${middlewarePath ? `import * as middlewareModule from ${JSON.stringify(middlewarePath.replace(/\\/g, "/"))};` : ""}
 ${effectiveMetaRoutes.length > 0 ? `import { sitemapToXml, robotsToText, manifestToJson } from ${JSON.stringify(fileURLToPath(new URL("./metadata-routes.js", import.meta.url)).replace(/\\/g, "/"))};` : ""}
@@ -227,6 +228,7 @@ import { runWithNavigationContext as _runWithNavigationContext } from "vinext/na
 import { reportRequestError as _reportRequestError } from "vinext/instrumentation";
 import { getSSRFontLinks as _getSSRFontLinks, getSSRFontStyles as _getSSRFontStylesGoogle, getSSRFontPreloads as _getSSRFontPreloadsGoogle } from "next/font/google";
 import { getSSRFontStyles as _getSSRFontStylesLocal, getSSRFontPreloads as _getSSRFontPreloadsLocal } from "next/font/local";
+import { runWithCloudflareContext } from ${JSON.stringify(fileURLToPath(new URL("../shims/cloudflare-context.js", import.meta.url)).replace(/\\/g, "/"))};
 function _getSSRFontStyles() { return [..._getSSRFontStylesGoogle(), ..._getSSRFontStylesLocal()]; }
 function _getSSRFontPreloads() { return [..._getSSRFontPreloadsGoogle(), ..._getSSRFontPreloadsLocal()]; }
 
@@ -384,8 +386,8 @@ async function renderHTTPAccessFallbackPage(route, statusCode, isRscRequest, req
       const LayoutComponent = layouts[i]?.default;
       if (LayoutComponent) {
         element = createElement(LayoutComponent, { children: element });
-        const layoutDepth = layoutDepths ? layoutDepths[i] : 0;
-        element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+        const layoutSegments = route?.segmentNodes ? resolveLayoutSegments(route.segmentNodes, route.layoutNodeIndices[i], {}) : [];
+        element = createElement(LayoutSegmentProvider, { segments: layoutSegments }, element);
       }
     }
     ${globalErrorVar ? `
@@ -483,8 +485,8 @@ async function renderErrorBoundaryPage(route, error, isRscRequest, request) {
       const LayoutComponent = layouts[i]?.default;
       if (LayoutComponent) {
         element = createElement(LayoutComponent, { children: element });
-        const layoutDepth = layoutDepths ? layoutDepths[i] : 0;
-        element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+        const layoutSegments = route?.segmentNodes ? resolveLayoutSegments(route.segmentNodes, route.layoutNodeIndices[i], {}) : [];
+        element = createElement(LayoutSegmentProvider, { segments: layoutSegments }, element);
       }
     }
     ${globalErrorVar ? `
@@ -820,8 +822,8 @@ async function buildPageElement(route, params, opts, searchParams) {
       // hook how many URL segments are above this layout, so it returns only the
       // segments below. We wrap the layout (not just children) because hooks are
       // called from components rendered inside the layout's own JSX.
-      const layoutDepth = route.layoutSegmentDepths ? route.layoutSegmentDepths[i] : 0;
-      element = createElement(LayoutSegmentProvider, { depth: layoutDepth }, element);
+      const layoutSegments = route.segmentNodes ? resolveLayoutSegments(route.segmentNodes, route.layoutNodeIndices[i], params || {}) : [];
+      element = createElement(LayoutSegmentProvider, { segments: layoutSegments }, element);
     }
   }
 
@@ -902,7 +904,7 @@ function __validateCsrfOrigin(request) {
   if (__allowedOrigins.length > 0 && __isOriginAllowed(originHost, __allowedOrigins)) return null;
 
   console.warn(
-    \`[vinext] CSRF origin mismatch: origin "\${originHost}" does not match host "\${hostHeader}". Blocking server action request.\`
+    \`[\x1b[36mTichPhong OS\x1b[0m] CSRF origin mismatch: origin "\${originHost}" does not match host "\${hostHeader}". Blocking server action request.\`
   );
   return new Response("Forbidden", { status: 403, headers: { "Content-Type": "text/plain" } });
 }
@@ -1067,22 +1069,18 @@ var __MAX_ACTION_BODY_SIZE = 1 * 1024 * 1024;
  */
 async function __readBodyWithLimit(request, maxBytes) {
   if (!request.body) return "";
-  var reader = request.body.getReader();
-  var decoder = new TextDecoder();
-  var chunks = [];
-  var totalSize = 0;
-  for (;;) {
-    var result = await reader.read();
-    if (result.done) break;
-    totalSize += result.value.byteLength;
-    if (totalSize > maxBytes) {
-      reader.cancel();
-      throw new Error("Request body too large");
+  let totalSize = 0;
+  const transform = new TransformStream({
+    transform(chunk, controller) {
+      totalSize += chunk.byteLength;
+      if (totalSize > maxBytes) {
+        controller.error(new Error("Request body too large"));
+      } else {
+        controller.enqueue(chunk);
+      }
     }
-    chunks.push(decoder.decode(result.value, { stream: true }));
-  }
-  chunks.push(decoder.decode());
-  return chunks.join("");
+  });
+  return new Response(request.body.pipeThrough(transform)).text();
 }
 
 /**
@@ -1092,29 +1090,21 @@ async function __readBodyWithLimit(request, maxBytes) {
  */
 async function __readFormDataWithLimit(request, maxBytes) {
   if (!request.body) return new FormData();
-  var reader = request.body.getReader();
-  var chunks = [];
-  var totalSize = 0;
-  for (;;) {
-    var result = await reader.read();
-    if (result.done) break;
-    totalSize += result.value.byteLength;
-    if (totalSize > maxBytes) {
-      reader.cancel();
-      throw new Error("Request body too large");
+  let totalSize = 0;
+  const transform = new TransformStream({
+    transform(chunk, controller) {
+      totalSize += chunk.byteLength;
+      if (totalSize > maxBytes) {
+        controller.error(new Error("Request body too large"));
+      } else {
+        controller.enqueue(chunk);
+      }
     }
-    chunks.push(result.value);
-  }
-  // Reconstruct a Response with the original Content-Type so that
-  // the FormData parser can handle multipart boundaries correctly.
-  var combined = new Uint8Array(totalSize);
-  var offset = 0;
-  for (var chunk of chunks) {
-    combined.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  var contentType = request.headers.get("content-type") || "";
-  return new Response(combined, { headers: { "Content-Type": contentType } }).formData();
+  });
+  const contentType = request.headers.get("content-type") || "";
+  return new Response(request.body.pipeThrough(transform), { 
+    headers: { "Content-Type": contentType } 
+  }).formData();
 }
 
 const __hopByHopHeaders = new Set(["connection","keep-alive","proxy-authenticate","proxy-authorization","te","trailers","transfer-encoding","upgrade"]);
@@ -1145,7 +1135,7 @@ async function __proxyExternalRequest(request, externalUrl) {
   try { upstream = await fetch(targetUrl.href, init); }
   catch (e) {
     if (e && e.name === "TimeoutError") return new Response("Gateway Timeout", { status: 504 });
-    console.error("[vinext] External rewrite proxy error:", e); return new Response("Bad Gateway", { status: 502 });
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy error:", e); return new Response("Bad Gateway", { status: 502 });
   }
   const respHeaders = new Headers();
   upstream.headers.forEach(function(value, key) { if (!__hopByHopHeaders.has(key.toLowerCase())) respHeaders.append(key, value); });
@@ -1173,16 +1163,31 @@ function __applyConfigHeaders(pathname) {
   return result;
 }
 
+let __cfProxy = null;
+async function __getCloudflareProxy() {
+  if (__cfProxy) return __cfProxy;
+  try {
+    const { getPlatformProxy } = await import("wrangler");
+    __cfProxy = await getPlatformProxy({ persist: true });
+  } catch (err) {
+    console.warn("[\x1b[36mTichPhong OS\x1b[0m] Could not load wrangler proxy. Cloudflare Context will be empty.", err);
+    __cfProxy = { env: {}, ctx: {} };
+  }
+  return __cfProxy;
+}
+
 export default async function handler(request) {
-  // Wrap the entire request in nested AsyncLocalStorage.run() scopes to ensure
-  // per-request isolation for all state modules. Each runWith*() creates an
-  // ALS scope that propagates through all async continuations (including RSC
-  // streaming), preventing state leakage between concurrent requests on
-  // Cloudflare Workers and other concurrent runtimes.
-  const headersCtx = headersContextFromRequest(request);
-  return runWithHeadersContext(headersCtx, () =>
-    _runWithNavigationContext(() =>
-      _runWithCacheState(() =>
+  const cfProxy = await __getCloudflareProxy();
+  return runWithCloudflareContext({ env: cfProxy.env, ctx: cfProxy.ctx }, () => {
+    // Wrap the entire request in nested AsyncLocalStorage.run() scopes to ensure
+    // per-request isolation for all state modules. Each runWith*() creates an
+    // ALS scope that propagates through all async continuations (including RSC
+    // streaming), preventing state leakage between concurrent requests on
+    // Cloudflare Workers and other concurrent runtimes.
+    const headersCtx = headersContextFromRequest(request);
+    return runWithHeadersContext(headersCtx, () =>
+      _runWithNavigationContext(() =>
+        _runWithCacheState(() =>
         _runWithPrivateCache(() =>
           runWithFetchCache(async () => {
             const response = await _handleRequest(request);
@@ -1205,6 +1210,7 @@ export default async function handler(request) {
       )
     )
   );
+  });
 }
 
 async function _handleRequest(request) {
@@ -1346,7 +1352,7 @@ async function _handleRequest(request) {
         }
       }
     } catch (err) {
-      console.error("[vinext] Middleware error:", err);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Middleware error:", err);
       return new Response("Internal Server Error", { status: 500 });
     }
   }
@@ -1382,8 +1388,49 @@ async function _handleRequest(request) {
     if (__resolvedImg.origin !== url.origin) {
       return new Response("Only relative URLs allowed", { status: 400 });
     }
-    // In dev, redirect to the original asset URL so Vite's static serving handles it.
-    return Response.redirect(__resolvedImg.href, 302);
+    try {
+      // @ts-ignore
+      const sharp = (await import("sharp")).default;
+      const __imgRes = await fetch(__resolvedImg.href, {
+        headers: {
+          "Cookie": request.headers.get("cookie") || "",
+          "Authorization": request.headers.get("authorization") || ""
+        }
+      });
+      if (!__imgRes.ok) return new Response(__imgRes.status === 404 ? "Image not found" : "Bad Gateway fetching image", { status: __imgRes.status === 404 ? 404 : 502 });
+      
+      const __imgBuffer = await __imgRes.arrayBuffer();
+      const __widthStr = url.searchParams.get("w");
+      const __width = __widthStr ? parseInt(__widthStr, 10) : undefined;
+      const __qualityStr = url.searchParams.get("q");
+      const __quality = __qualityStr ? parseInt(__qualityStr, 10) : 75;
+      
+      const __accept = request.headers.get("accept") || "";
+      let __format = "jpeg";
+      if (__accept.includes("image/avif")) __format = "avif";
+      else if (__accept.includes("image/webp")) __format = "webp";
+      else if (__imgRes.headers.get("content-type") === "image/png") __format = "png";
+      
+      let __pipeline = sharp(Buffer.from(__imgBuffer));
+      if (__width && __width > 0) __pipeline = __pipeline.resize({ width: __width, withoutEnlargement: true });
+      
+      if (__format === "avif") __pipeline = __pipeline.avif({ quality: __quality });
+      else if (__format === "webp") __pipeline = __pipeline.webp({ quality: __quality });
+      else if (__format === "png") __pipeline = __pipeline.png({ quality: __quality });
+      else __pipeline = __pipeline.jpeg({ quality: __quality, progressive: true });
+      
+      const __optimizedBuffer = await __pipeline.toBuffer();
+      return new Response(__optimizedBuffer, {
+        headers: {
+          "Content-Type": "image/" + __format,
+          "Cache-Control": "public, max-age=3600"
+        }
+      });
+    } catch(err) {
+      console.warn("[\x1b[36mTichPhong OS\x1b[0m] Local Image Optimizer failed (is sharp installed?), falling back to redirect.", err);
+      // In dev, redirect to the original asset URL so Vite's static serving handles it.
+      return Response.redirect(__resolvedImg.href, 302);
+    }
   }
 
   // Handle metadata routes (sitemap.xml, robots.txt, manifest.webmanifest, etc.)
@@ -1497,13 +1544,13 @@ async function _handleRequest(request) {
           } else {
             // Non-navigation digest error — sanitize in production to avoid
             // leaking internal details (connection strings, paths, etc.)
-            console.error("[vinext] Server action error:", e);
+            console.error("[\x1b[36mTichPhong OS\x1b[0m] Server action error:", e);
             returnValue = { ok: false, data: __sanitizeErrorForClient(e) };
           }
         } else {
           // Unhandled error — sanitize in production to avoid leaking
           // internal details (database errors, file paths, stack traces, etc.)
-          console.error("[vinext] Server action error:", e);
+          console.error("[\x1b[36mTichPhong OS\x1b[0m] Server action error:", e);
           returnValue = { ok: false, data: __sanitizeErrorForClient(e) };
         }
       }
@@ -1570,13 +1617,13 @@ async function _handleRequest(request) {
       return actionResponse;
     } catch (err) {
       getAndClearPendingCookies(); // Clear pending cookies on error
-      console.error("[vinext] Server action error:", err);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Server action error:", err);
       _reportRequestError(
         err instanceof Error ? err : new Error(String(err)),
         { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
         { routerKind: "App Router", routePath: cleanPathname, routeType: "action" },
       ).catch((reportErr) => {
-        console.error("[vinext] Failed to report server action error:", reportErr);
+        console.error("[\x1b[36mTichPhong OS\x1b[0m] Failed to report server action error:", reportErr);
       });
       setHeadersContext(null);
       setNavigationContext(null);
@@ -1736,13 +1783,13 @@ async function _handleRequest(request) {
         }
         setHeadersContext(null);
         setNavigationContext(null);
-        console.error("[vinext] Route handler error:", err);
+        console.error("[\x1b[36mTichPhong OS\x1b[0m] Route handler error:", err);
         _reportRequestError(
           err instanceof Error ? err : new Error(String(err)),
           { path: cleanPathname, method: request.method, headers: Object.fromEntries(request.headers.entries()) },
           { routerKind: "App Router", routePath: route.pattern, routeType: "route" },
         ).catch((reportErr) => {
-          console.error("[vinext] Failed to report route handler error:", reportErr);
+          console.error("[\x1b[36mTichPhong OS\x1b[0m] Failed to report route handler error:", reportErr);
         });
         return new Response(null, { status: 500 });
       }
@@ -1833,7 +1880,7 @@ async function _handleRequest(request) {
         }
       }
     } catch (err) {
-      console.error("[vinext] generateStaticParams error:", err);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] generateStaticParams error:", err);
     }
   }
 
@@ -2293,7 +2340,7 @@ function createRscEmbedTransform(embedStream) {
       }
     } catch (err) {
       if (process.env.NODE_ENV !== "production") {
-        console.warn("[vinext] RSC embed stream read error:", err);
+        console.warn("[\x1b[36mTichPhong OS\x1b[0m] RSC embed stream read error:", err);
       }
       done = true;
     }
@@ -2616,6 +2663,7 @@ import {
 } from "@vitejs/plugin-rsc/browser";
 import { hydrateRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
+import { startTransition } from "react";
 import { setClientParams, toRscUrl, getPrefetchCache, getPrefetchedUrls, PREFETCH_CACHE_TTL } from "next/navigation";
 
 let reactRoot;
@@ -2866,7 +2914,7 @@ async function main() {
       // after awaiting, so the new content must be painted first.
       flushSync(function () { reactRoot.render(rscPayload); });
     } catch (err) {
-      console.error("[vinext] RSC navigation error:", err);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] RSC navigation error:", err);
       // Fallback to full page load
       window.location.href = href;
     }
@@ -2895,9 +2943,11 @@ async function main() {
         const rscPayload = await createFromFetch(
           fetch(toRscUrl(window.location.pathname + window.location.search))
         );
-        reactRoot.render(rscPayload);
+        startTransition(() => {
+          reactRoot.render(rscPayload);
+        });
       } catch (err) {
-        console.error("[vinext] RSC HMR error:", err);
+        console.error("[\x1b[36mTichPhong OS\x1b[0m] RSC HMR error:", err);
       }
     });
   }

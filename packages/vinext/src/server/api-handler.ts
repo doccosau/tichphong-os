@@ -11,6 +11,23 @@ import type { ViteDevServer } from "vite";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { type Route, matchRoute } from "../routing/pages-router.js";
 import { addQueryParam } from "../utils/query.js";
+import { runWithCloudflareContext } from "../shims/cloudflare-context.js";
+import { TichPhongSyncManager } from "../tichphong-os/sync/sync-manager.js";
+import { KernelEvent } from "../tichphong-os/core/types.js";
+
+let __cfProxy: any = null;
+async function __getCloudflareProxy() {
+  if (__cfProxy) return __cfProxy;
+  try {
+    // @ts-ignore
+    const { getPlatformProxy } = await import("wrangler");
+    __cfProxy = await getPlatformProxy({ persist: true });
+  } catch (err) {
+    console.warn("[\x1b[36mTichPhong OS\x1b[0m] Could not load wrangler proxy. Cloudflare Context will be empty.", err);
+    __cfProxy = { env: {}, ctx: {} };
+  }
+  return __cfProxy;
+}
 
 /**
  * Extend the Node.js request with Next.js-style helpers.
@@ -168,6 +185,40 @@ export async function handleApiRoute(
   url: string,
   apiRoutes: Route[],
 ): Promise<boolean> {
+  // Bẻ nhánh (Bypass) API Framework Next.js, giành quyền cho OS Native Sync
+  const isTichPhongEvent = req.headers["content-type"] === "application/tichphong-event";
+  if (isTichPhongEvent) {
+    try {
+      console.log(`\x1b[36m[TichPhong OS]\x1b[0m Intercepted Native Event Envelope routing...`);
+      const body = await parseBody(req);
+      const events: KernelEvent[] = Array.isArray(body) ? body as KernelEvent[] : [body as KernelEvent];
+
+      const cfProxy = await __getCloudflareProxy();
+      const ctx = {
+        db: cfProxy.env.DB,
+        userId: (req.headers["x-user-id"] as string) || "anonymous",
+        schema: {
+          usersTable: null,
+          processedEventsTable: null,
+          userIdField: null,
+        }
+      };
+
+      const syncManager = TichPhongSyncManager.getInstance();
+      const result = await syncManager.processCheckpoint(events, ctx);
+
+      res.statusCode = 200;
+      res.setHeader("Content-Type", "application/json");
+      res.end(JSON.stringify(result));
+      return true;
+    } catch (e) {
+      console.error("[TichPhong OS] OS Sync Runtime Error:", e);
+      res.statusCode = 500;
+      res.end(JSON.stringify({ success: false, error: "SYNC_CRASHED" }));
+      return true;
+    }
+  }
+
   const match = matchRoute(url, apiRoutes);
   if (!match) return false;
 
@@ -179,7 +230,7 @@ export async function handleApiRoute(
     const handler = apiModule.default;
 
     if (typeof handler !== "function") {
-      console.error(`[vinext] API route ${route.filePath} does not export a default function`);
+      console.error(`[\x1b[36mTichPhong OS\x1b[0m] API route ${route.filePath} does not export a default function`);
       res.statusCode = 500;
       res.end("API route does not export a default function");
       return true;
@@ -201,8 +252,12 @@ export async function handleApiRoute(
     // Enhance req/res with Next.js helpers
     const { apiReq, apiRes } = enhanceApiObjects(req, res, query, body);
 
+    const cfProxy = await __getCloudflareProxy();
+
     // Call the handler
-    await handler(apiReq, apiRes);
+    await runWithCloudflareContext({ env: cfProxy.env, ctx: cfProxy.ctx }, async () => {
+      await handler(apiReq, apiRes);
+    });
     return true;
   } catch (e) {
     server.ssrFixStacktrace(e as Error);

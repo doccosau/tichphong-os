@@ -61,7 +61,7 @@ function reactElementToHTML(child: React.ReactElement): string {
   if (!ALLOWED_HEAD_TAGS.has(tag)) {
     if (process.env.NODE_ENV !== "production") {
       console.warn(
-        `[vinext] <Head> ignoring disallowed tag <${tag}>. ` +
+        `[\x1b[36mTichPhong OS\x1b[0m] <Head> ignoring disallowed tag <${tag}>. ` +
         `Only ${[...ALLOWED_HEAD_TAGS].join(", ")} are allowed.`,
       );
     }

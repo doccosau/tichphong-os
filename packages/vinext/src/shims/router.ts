@@ -342,7 +342,7 @@ async function navigateClient(url: string): Promise<void> {
     // Validate the module URL before importing — defense-in-depth against
     // unexpected __NEXT_DATA__ or malformed HTML responses
     if (!isValidModulePath(pageModuleUrl)) {
-      console.error("[vinext] Blocked import of invalid page module path:", pageModuleUrl);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Blocked import of invalid page module path:", pageModuleUrl);
       window.location.href = url;
       return;
     }
@@ -366,7 +366,7 @@ async function navigateClient(url: string): Promise<void> {
 
     if (!AppComponent && appModuleUrl) {
       if (!isValidModulePath(appModuleUrl)) {
-        console.error("[vinext] Blocked import of invalid app module path:", appModuleUrl);
+        console.error("[\x1b[36mTichPhong OS\x1b[0m] Blocked import of invalid app module path:", appModuleUrl);
       } else {
         try {
           const appModule = await import(/* @vite-ignore */ appModuleUrl);
@@ -390,7 +390,7 @@ async function navigateClient(url: string): Promise<void> {
 
     root.render(element);
   } catch (err) {
-    console.error("[vinext] Client navigation failed:", err);
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] Client navigation failed:", err);
     routerEvents.emit("routeChangeError", err, url);
     window.location.href = url;
   } finally {

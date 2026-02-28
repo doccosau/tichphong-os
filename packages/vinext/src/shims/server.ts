@@ -420,7 +420,7 @@ export interface UserAgent {
 export function after<T>(task: Promise<T> | (() => T | Promise<T>)): void {
   const promise = typeof task === "function" ? Promise.resolve().then(task) : task;
   promise.catch((err) => {
-    console.error("[vinext] after() task failed:", err);
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] after() task failed:", err);
   });
 }
 

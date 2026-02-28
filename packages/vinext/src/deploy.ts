@@ -673,7 +673,7 @@ export default {
 
       return mergeHeaders(response, middlewareHeaders, middlewareRewriteStatus);
     } catch (error) {
-      console.error("[vinext] Worker error:", error);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Worker error:", error);
       return new Response("Internal Server Error", { status: 500 });
     }
   },

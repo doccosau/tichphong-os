@@ -24,6 +24,7 @@ import {
   type CachedFetchValue,
 } from "./cache.js";
 import { AsyncLocalStorage } from "node:async_hooks";
+import { getCloudflareContext } from "../cloudflare/index.js";
 
 // ---------------------------------------------------------------------------
 // Cache key generation
@@ -147,7 +148,7 @@ async function serializeBody(init?: RequestInit): Promise<string[]> {
       if (err instanceof BodyTooLargeForCacheKeyError) {
         throw err;
       }
-      console.error("[vinext] Problem reading body for cache key", err);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Problem reading body for cache key", err);
     }
   } else if (init.body instanceof URLSearchParams) {
     // URLSearchParams — .toString() gives a stable serialization
@@ -424,7 +425,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
 
         // Background refetch
         const cleanInit = stripNextFromInit(init);
-        originalFetch(input, cleanInit).then(async (freshResp) => {
+        const bgPromise = originalFetch(input, cleanInit).then(async (freshResp) => {
           const freshBody = await freshResp.text();
           const freshHeaders: Record<string, string> = {};
           freshResp.headers.forEach((v, k) => { freshHeaders[k] = v; });
@@ -446,8 +447,14 @@ function createPatchedFetch(): typeof globalThis.fetch {
             revalidate: revalidateSeconds,
           });
         }).catch((err) => {
-          console.error("[vinext] fetch cache background revalidation failed:", err);
+          console.error("[\x1b[36mTichPhong OS\x1b[0m] fetch cache background revalidation failed:", err);
         });
+
+        // Ensure Cloudflare Workers does not kill this background promise
+        const cfCtx = getCloudflareContext();
+        if (cfCtx?.ctx?.waitUntil) {
+          cfCtx.ctx.waitUntil(bgPromise);
+        }
 
         // Return stale data immediately
         return new Response(staleData.body, {
@@ -457,7 +464,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
       }
     } catch (cacheErr) {
       // Cache read failed — fall through to network
-      console.error("[vinext] fetch cache read error:", cacheErr);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] fetch cache read error:", cacheErr);
     }
 
     // Cache miss — fetch from network
@@ -490,7 +497,7 @@ function createPatchedFetch(): typeof globalThis.fetch {
         tags,
         revalidate: revalidateSeconds,
       }).catch((err) => {
-        console.error("[vinext] fetch cache write error:", err);
+        console.error("[\x1b[36mTichPhong OS\x1b[0m] fetch cache write error:", err);
       });
     }
 

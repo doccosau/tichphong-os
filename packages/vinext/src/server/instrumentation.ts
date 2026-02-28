@@ -103,7 +103,7 @@ export async function runInstrumentation(
     }
   } catch (err) {
     console.error(
-      "[vinext] Failed to load instrumentation:",
+      "[\x1b[36mTichPhong OS\x1b[0m] Failed to load instrumentation:",
       err instanceof Error ? err.message : String(err),
     );
   }
@@ -124,7 +124,7 @@ export async function reportRequestError(
     await _onRequestError(error, request, context);
   } catch (reportErr) {
     console.error(
-      "[vinext] onRequestError handler threw:",
+      "[\x1b[36mTichPhong OS\x1b[0m] onRequestError handler threw:",
       reportErr instanceof Error ? reportErr.message : String(reportErr),
     );
   }

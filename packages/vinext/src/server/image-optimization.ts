@@ -223,7 +223,7 @@ export async function handleImageOptimization(
 
       return new Response(transformed.body, { status: 200, headers });
     } catch (e) {
-      console.error("[vinext] Image optimization error:", e);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Image optimization error:", e);
       // Fall through to serve original
     }
   }

@@ -24,7 +24,7 @@ const appModulePath = nextData?.__appModule;
 
 async function hydrate() {
   if (!isValidModulePath(pageModulePath)) {
-    console.error("[vinext] Invalid or missing __pageModule in __NEXT_DATA__");
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] Invalid or missing __pageModule in __NEXT_DATA__");
     return;
   }
 
@@ -33,7 +33,7 @@ async function hydrate() {
   const PageComponent = pageModule.default;
 
   if (!PageComponent) {
-    console.error("[vinext] Page module has no default export");
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] Page module has no default export");
     return;
   }
 
@@ -42,7 +42,7 @@ async function hydrate() {
   // If there's a custom _app, wrap the page with it
   if (appModulePath) {
     if (!isValidModulePath(appModulePath)) {
-      console.error("[vinext] Invalid __appModule in __NEXT_DATA__");
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Invalid __appModule in __NEXT_DATA__");
     } else {
       try {
         const appModule = await import(/* @vite-ignore */ appModulePath);
@@ -64,7 +64,7 @@ async function hydrate() {
 
   const container = document.getElementById("__next");
   if (!container) {
-    console.error("[vinext] No #__next element found");
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] No #__next element found");
     return;
   }
 

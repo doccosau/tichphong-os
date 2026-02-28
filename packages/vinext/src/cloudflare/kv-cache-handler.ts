@@ -31,6 +31,7 @@ import type {
   CacheHandlerValue,
   IncrementalCacheValue,
 } from "../shims/cache.js";
+import { getCloudflareContext } from "./index.js";
 
 // Cloudflare KV namespace interface (matches Workers types)
 interface KVNamespace {
@@ -98,8 +99,59 @@ export class KVCacheHandler implements CacheHandler {
     _ctx?: Record<string, unknown>,
   ): Promise<CacheHandlerValue | null> {
     const kvKey = this.prefix + ENTRY_PREFIX + key;
+
+    // -----------------------------------------------------------------
+    // L1 CACHE (Edge Cache API)
+    // -----------------------------------------------------------------
+    const cfCtx = getCloudflareContext();
+    const l1CacheUrl = `https://vinext-cache.local/${kvKey}`;
+
+    // Only attempt L1 cache if running on Cloudflare Workers environment
+    if (cfCtx?.ctx && typeof caches !== "undefined" && (caches as any).default) {
+      try {
+        const l1Req = new Request(l1CacheUrl);
+        const l1Res = await (caches as any).default.match(l1Req);
+        if (l1Res) {
+          const raw = await l1Res.text();
+          return this.processRawEntry(raw, kvKey);
+        }
+      } catch (err) {
+        console.warn("[\x1b[36mTichPhong OS\x1b[0m] L1 Cache (Edge) read error:", err);
+      }
+    }
+
+    // -----------------------------------------------------------------
+    // L2 CACHE (Cloudflare KV)
+    // -----------------------------------------------------------------
     const raw = await this.kv.get(kvKey);
     if (!raw) return null;
+
+    const processed = await this.processRawEntry(raw, kvKey);
+
+    // Write-back to L1 Cache asynchronously
+    if (processed && cfCtx?.ctx?.waitUntil && typeof caches !== "undefined" && (caches as any).default) {
+      this.writeToL1Cache(l1CacheUrl, raw, cfCtx.ctx);
+    }
+
+    return processed;
+  }
+
+  /** Fire-and-forget write to L1 Edge Cache */
+  private writeToL1Cache(url: string, rawData: string, ctx: any) {
+    try {
+      const res = new Response(rawData, {
+        headers: {
+          "Cache-Control": "public, max-age=31536000",
+        }
+      });
+      ctx.waitUntil((caches as any).default.put(new Request(url), res));
+    } catch (err) {
+      console.warn("[\x1b[36mTichPhong OS\x1b[0m] L1 Cache (Edge) write error:", err);
+    }
+  }
+
+  /** Centralized parsing logic to share between L1 and L2 reads */
+  private async processRawEntry(raw: string, kvKey: string): Promise<CacheHandlerValue | null> {
 
     let parsed: unknown;
     try {
@@ -113,7 +165,7 @@ export class KVCacheHandler implements CacheHandler {
     // Validate deserialized shape before using
     const entry = validateCacheEntry(parsed);
     if (!entry) {
-      console.error("[vinext] Invalid cache entry shape for key:", key);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] Invalid cache entry shape for key:", kvKey);
       await this.kv.delete(kvKey);
       return null;
     }
@@ -226,6 +278,13 @@ export class KVCacheHandler implements CacheHandler {
     await this.kv.put(this.prefix + ENTRY_PREFIX + key, JSON.stringify(entry), {
       expirationTtl,
     });
+
+    // Also push to L1 cache immediately if available
+    const cfCtx = getCloudflareContext();
+    if (cfCtx?.ctx?.waitUntil && typeof caches !== "undefined" && (caches as any).default) {
+      const l1CacheUrl = `https://vinext-cache.local/${this.prefix + ENTRY_PREFIX + key}`;
+      this.writeToL1Cache(l1CacheUrl, JSON.stringify(entry), cfCtx.ctx);
+    }
   }
 
   async revalidateTag(
@@ -374,7 +433,7 @@ function safeBase64ToArrayBuffer(base64: string): ArrayBuffer | null {
   try {
     return base64ToArrayBuffer(base64);
   } catch {
-    console.error("[vinext] Invalid base64 in cache entry");
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] Invalid base64 in cache entry");
     return null;
   }
 }

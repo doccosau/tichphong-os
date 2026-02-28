@@ -209,14 +209,14 @@ export async function loadNextConfig(root: string): Promise<NextConfig | null> {
           return await unwrapConfig({ default: mod });
         } catch (e2) {
           console.warn(
-            `[vinext] Failed to load ${filename}: ${(e2 as Error).message}`,
+            `[\x1b[36mTichPhong OS\x1b[0m] Failed to load ${filename}: ${(e2 as Error).message}`,
           );
           return null;
         }
       }
 
       console.warn(
-        `[vinext] Failed to load ${filename}: ${(e as Error).message}`,
+        `[\x1b[36mTichPhong OS\x1b[0m] Failed to load ${filename}: ${(e as Error).message}`,
       );
       return null;
     }
@@ -292,14 +292,14 @@ export async function resolveNextConfig(
   for (const key of unsupported) {
     if (config[key] !== undefined) {
       console.warn(
-        `[vinext] next.config option "${key}" is not yet supported and will be ignored`,
+        `[\x1b[36mTichPhong OS\x1b[0m] next.config option "${key}" is not yet supported and will be ignored`,
       );
     }
   }
 
   const output = config.output ?? "";
   if (output && output !== "export" && output !== "standalone") {
-    console.warn(`[vinext] Unknown output mode "${output as string}", ignoring`);
+    console.warn(`[\x1b[36mTichPhong OS\x1b[0m] Unknown output mode "${output as string}", ignoring`);
   }
 
   // Parse i18n config

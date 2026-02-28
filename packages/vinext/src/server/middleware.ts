@@ -68,7 +68,7 @@ export function findMiddlewareFile(root: string): string | null {
     const fullPath = path.join(root, file);
     if (fs.existsSync(fullPath)) {
       console.warn(
-        "[vinext] middleware.ts is deprecated in Next.js 16. " +
+        "[\x1b[36mTichPhong OS\x1b[0m] middleware.ts is deprecated in Next.js 16. " +
           "Rename to proxy.ts and export a default function.",
       );
       return fullPath;
@@ -236,7 +236,7 @@ export async function runMiddleware(
   try {
     response = await middlewareFn(nextRequest);
   } catch (e: any) {
-    console.error("[vinext] Middleware error:", e);
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] Middleware error:", e);
     const message =
       process.env.NODE_ENV === "production"
         ? "Internal Server Error"

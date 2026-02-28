@@ -101,7 +101,18 @@ export interface AppRoute {
   isDynamic: boolean;
   /** Parameter names for dynamic segments */
   params: string[];
+  /** Abstract syntax tree of the filesystem route segments */
+  segmentNodes: RouteSegmentNode[];
+  /** For each layout in the layouts array, its start index in the segmentNodes array */
+  layoutNodeIndices: number[];
 }
+
+export type RouteSegmentNode =
+  | { type: "static"; name: string }
+  | { type: "route-group"; name: string }
+  | { type: "dynamic"; param: string }
+  | { type: "catchall"; param: string }
+  | { type: "optional-catchall"; param: string };
 
 // Cache for app routes
 let cachedRoutes: AppRoute[] | null = null;
@@ -110,6 +121,33 @@ let cachedAppDir: string | null = null;
 export function invalidateAppRouteCache(): void {
   cachedRoutes = null;
   cachedAppDir = null;
+}
+
+/**
+ * Resolve layout segment names from AST nodes and request params.
+ * Used at runtime to provide accurate active segment names per layout.
+ */
+export function resolveLayoutSegments(
+  segmentNodes: RouteSegmentNode[],
+  startIndex: number,
+  routeParams: Record<string, string | string[]>
+): string[] {
+  const result: string[] = [];
+  for (let i = startIndex; i < segmentNodes.length; i++) {
+    const node = segmentNodes[i];
+    if (node.type === "static" || node.type === "route-group") {
+      result.push(node.name);
+    } else if (node.type === "dynamic") {
+      const val = routeParams[node.param];
+      if (typeof val === "string") result.push(val);
+      else if (Array.isArray(val) && val.length > 0) result.push(val[0]);
+    } else if (node.type === "catchall" || node.type === "optional-catchall") {
+      const val = routeParams[node.param];
+      if (Array.isArray(val)) result.push(...val);
+      else if (typeof val === "string") result.push(val);
+    }
+  }
+  return result;
 }
 
 /**
@@ -205,15 +243,21 @@ function discoverSlotSubRoutes(
       const subParams: string[] = [];
       let subIsDynamic = false;
 
+      const subSegmentNodes: RouteSegmentNode[] = [];
+
       for (const seg of subSegments) {
-        // Route groups are transparent
-        if (seg.startsWith("(") && seg.endsWith(")")) continue;
+        // Route groups are transparent in URL but present in segments
+        if (seg.startsWith("(") && seg.endsWith(")")) {
+          subSegmentNodes.push({ type: "route-group", name: seg });
+          continue;
+        }
 
         const catchAllMatch = seg.match(/^\[\.\.\.([\w-]+)\]$/);
         if (catchAllMatch) {
           subIsDynamic = true;
           subParams.push(catchAllMatch[1]);
           urlParts.push(`:${catchAllMatch[1]}+`);
+          subSegmentNodes.push({ type: "catchall", param: catchAllMatch[1] });
           continue;
         }
         const optionalCatchAllMatch = seg.match(/^\[\[\.\.\.([\w-]+)\]\]$/);
@@ -221,6 +265,7 @@ function discoverSlotSubRoutes(
           subIsDynamic = true;
           subParams.push(optionalCatchAllMatch[1]);
           urlParts.push(`:${optionalCatchAllMatch[1]}*`);
+          subSegmentNodes.push({ type: "optional-catchall", param: optionalCatchAllMatch[1] });
           continue;
         }
         const dynamicMatch = seg.match(/^\[([\w-]+)\]$/);
@@ -228,10 +273,12 @@ function discoverSlotSubRoutes(
           subIsDynamic = true;
           subParams.push(dynamicMatch[1]);
           urlParts.push(`:${dynamicMatch[1]}`);
+          subSegmentNodes.push({ type: "dynamic", param: dynamicMatch[1] });
           continue;
         }
 
         urlParts.push(seg);
+        subSegmentNodes.push({ type: "static", name: seg });
       }
 
       const subUrlPath = urlParts.join("/");
@@ -270,6 +317,8 @@ function discoverSlotSubRoutes(
         layoutSegmentDepths: parentRoute.layoutSegmentDepths,
         isDynamic: parentRoute.isDynamic || subIsDynamic,
         params: [...parentRoute.params, ...subParams],
+        segmentNodes: [...parentRoute.segmentNodes, ...subSegmentNodes],
+        layoutNodeIndices: parentRoute.layoutNodeIndices,
       });
     }
   }
@@ -327,12 +376,14 @@ function fileToAppRoute(
 
   const params: string[] = [];
   let isDynamic = false;
+  const segmentNodes: RouteSegmentNode[] = [];
 
   // Convert segments to URL pattern, stripping route groups and parallel slots
   const urlSegments: string[] = [];
   for (const segment of segments) {
     // Route groups: (group) -> skip (transparent in URL)
     if (segment.startsWith("(") && segment.endsWith(")")) {
+      segmentNodes.push({ type: "route-group", name: segment });
       continue;
     }
 
@@ -347,6 +398,7 @@ function fileToAppRoute(
       isDynamic = true;
       params.push(catchAllMatch[1]);
       urlSegments.push(`:${catchAllMatch[1]}+`);
+      segmentNodes.push({ type: "catchall", param: catchAllMatch[1] });
       continue;
     }
 
@@ -356,6 +408,7 @@ function fileToAppRoute(
       isDynamic = true;
       params.push(optionalCatchAllMatch[1]);
       urlSegments.push(`:${optionalCatchAllMatch[1]}*`);
+      segmentNodes.push({ type: "optional-catchall", param: optionalCatchAllMatch[1] });
       continue;
     }
 
@@ -365,14 +418,16 @@ function fileToAppRoute(
       isDynamic = true;
       params.push(dynamicMatch[1]);
       urlSegments.push(`:${dynamicMatch[1]}`);
+      segmentNodes.push({ type: "dynamic", param: dynamicMatch[1] });
       continue;
     }
 
+    let decoded = segment;
     try {
-      urlSegments.push(decodeURIComponent(segment));
-    } catch {
-      urlSegments.push(segment);
-    }
+      decoded = decodeURIComponent(segment);
+    } catch { }
+    urlSegments.push(decoded);
+    segmentNodes.push({ type: "static", name: decoded });
   }
 
   const pattern = "/" + urlSegments.join("/");
@@ -441,7 +496,41 @@ function fileToAppRoute(
     layoutSegmentDepths,
     isDynamic,
     params,
+    segmentNodes,
+    layoutNodeIndices: computeLayoutNodeIndices(segments, appDir, layouts),
   };
+}
+
+/**
+ * Compute the structural segment index for each layout in the layouts array.
+ * Route groups and non-slots contribute to the node index.
+ */
+function computeLayoutNodeIndices(
+  segments: string[],
+  appDir: string,
+  layouts: string[],
+): number[] {
+  const indexMap = new Map<string, number>();
+
+  const rootLayout = findFile(appDir, "layout");
+  if (rootLayout) indexMap.set(rootLayout, 0);
+
+  let nodeIdx = 0;
+  let currentDir = appDir;
+  for (const segment of segments) {
+    currentDir = path.join(currentDir, segment);
+
+    if (!segment.startsWith("@")) {
+      nodeIdx++;
+    }
+
+    const layout = findFile(currentDir, "layout");
+    if (layout) {
+      indexMap.set(layout, nodeIdx);
+    }
+  }
+
+  return layouts.map((layoutPath) => indexMap.get(layoutPath) ?? 0);
 }
 
 /**

@@ -148,13 +148,20 @@ function isRemoteUrl(src: string): boolean {
 const RESPONSIVE_WIDTHS = __imageDeviceSizes;
 
 /**
- * Build a `/_vinext/image` optimization URL.
+ * Build a optimization URL.
  *
- * In production (Cloudflare Workers), the worker intercepts this path and uses
- * the Images binding to resize/transcode on the fly. In dev, the Vite dev
- * server handles it as a passthrough (serves the original file).
+ * In production (Cloudflare Workers/Pages), this outputs Cloudflare's native Image Resizing URL
+ * `cdn-cgi/image/...` so the CDN processes it directly at the edge ($0 Worker CPU/RAM cost).
+ * In dev, it routes to `/_vinext/image` for local sharp-based optimization.
  */
 export function imageOptimizationUrl(src: string, width: number, quality: number = 75): string {
+  // src may be absolute (e.g http://... ) or relative (e.g /avatar.jpg)
+  if (!__isDev) {
+    // Determine the base format: 
+    // Cloudflare handles full domains or relative paths
+    const cfSrc = src.startsWith("/") ? src : encodeURIComponent(src);
+    return `/cdn-cgi/image/width=${width},quality=${quality},format=auto/${cfSrc.replace(/^\//, "")}`;
+  }
   return `/_vinext/image?url=${encodeURIComponent(src)}&w=${width}&q=${quality}`;
 }
 
@@ -304,11 +311,11 @@ const Image = forwardRef<HTMLImageElement, ImageProps>(function Image(
   const sanitizedLocalBlur = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
   const blurStyle = placeholder === "blur" && sanitizedLocalBlur
     ? {
-        backgroundImage: `url(${sanitizedLocalBlur})`,
-        backgroundSize: "cover",
-        backgroundRepeat: "no-repeat",
-        backgroundPosition: "center",
-      }
+      backgroundImage: `url(${sanitizedLocalBlur})`,
+      backgroundSize: "cover",
+      backgroundRepeat: "no-repeat",
+      backgroundPosition: "center",
+    }
     : undefined;
 
   // For local images, render a standard <img> tag with srcSet and blur support.
@@ -409,11 +416,11 @@ export function getImageProps(props: ImageProps): {
   const sanitizedBlurURL = imgBlurDataURL ? sanitizeBlurDataURL(imgBlurDataURL) : undefined;
   const blurStyle = placeholder === "blur" && sanitizedBlurURL
     ? {
-        backgroundImage: `url(${sanitizedBlurURL})`,
-        backgroundSize: "cover",
-        backgroundRepeat: "no-repeat" as const,
-        backgroundPosition: "center" as const,
-      }
+      backgroundImage: `url(${sanitizedBlurURL})`,
+      backgroundSize: "cover",
+      backgroundRepeat: "no-repeat" as const,
+      backgroundPosition: "center" as const,
+    }
     : undefined;
 
   return {

@@ -142,7 +142,7 @@ export function isSafeRegex(pattern: string): boolean {
 export function safeRegExp(pattern: string, flags?: string): RegExp | null {
   if (!isSafeRegex(pattern)) {
     console.warn(
-      `[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): ${pattern}\n` +
+      `[\x1b[36mTichPhong OS\x1b[0m] Ignoring potentially unsafe regex pattern (ReDoS risk): ${pattern}\n` +
       `  Patterns with nested quantifiers (e.g. (a+)+) can cause catastrophic backtracking.\n` +
       `  Simplify the pattern to avoid nested repetition.`,
     );
@@ -641,10 +641,10 @@ export async function proxyExternalRequest(
     upstreamResponse = await fetch(targetUrl.href, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      console.error("[vinext] External rewrite proxy timeout:", targetUrl.href);
+      console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy timeout:", targetUrl.href);
       return new Response("Gateway Timeout", { status: 504 });
     }
-    console.error("[vinext] External rewrite proxy error:", e);
+    console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy error:", e);
     return new Response("Bad Gateway", { status: 502 });
   } finally {
     clearTimeout(timeout);

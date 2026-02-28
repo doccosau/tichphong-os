@@ -19,33 +19,33 @@ import * as React from "react";
 // null and the hooks fall back to returning all segments (depth 0).
 // In SSR and browser environments, the context is created and used normally.
 
-let _LayoutSegmentCtx: React.Context<number> | null = null;
+let _LayoutSegmentCtx: React.Context<string[]> | null = null;
 
 /**
  * Get or create the layout segment context.
  * Returns null in the RSC environment (createContext unavailable).
  */
-export function getLayoutSegmentContext(): React.Context<number> | null {
+export function getLayoutSegmentContext(): React.Context<string[]> | null {
   if (_LayoutSegmentCtx === null && typeof React.createContext === "function") {
-    _LayoutSegmentCtx = React.createContext<number>(0);
+    _LayoutSegmentCtx = React.createContext<string[]>([]);
   }
   return _LayoutSegmentCtx;
 }
 
 /**
- * Read the layout segment depth from context. Returns 0 if no context
+ * Read the layout segment array from context. Returns [] if no context
  * is available (RSC environment, outside React tree, or root level).
  */
-function useLayoutSegmentDepth(): number {
+function useLayoutSegments(): string[] {
   const ctx = getLayoutSegmentContext();
-  if (!ctx) return 0;
+  if (!ctx) return [];
   // useContext is safe here because if createContext exists, useContext does too.
   // This branch is only taken in SSR/Browser, never in RSC.
   // Try/catch for unit tests that call this hook outside a React render tree.
   try {
-    return React.useContext(ctx);
+    return React.useContext(ctx) || [];
   } catch {
-    return 0;
+    return [];
   }
 }
 
@@ -278,7 +278,7 @@ export function usePathname(): string {
     return _getServerContext()?.pathname ?? "/";
   }
   // Client-side: use the hook system for reactivity
-   return React.useSyncExternalStore(
+  return React.useSyncExternalStore(
     (cb: () => void) => { _listeners.add(cb); return () => { _listeners.delete(cb); }; },
     getPathnameSnapshot,
     () => _getServerContext()?.pathname ?? "/",
@@ -294,7 +294,7 @@ export function useSearchParams(): URLSearchParams {
     // Return a safe fallback — the client will hydrate with the real value.
     return _getServerContext()?.searchParams ?? new URLSearchParams();
   }
-   return React.useSyncExternalStore(
+  return React.useSyncExternalStore(
     (cb: () => void) => { _listeners.add(cb); return () => { _listeners.delete(cb); }; },
     getSearchParamsSnapshot,
     getServerSearchParamsSnapshot,
@@ -567,19 +567,15 @@ export function useSelectedLayoutSegment(
  *
  * In Next.js, this returns the full array of segments from the current
  * layout down to the leaf page. Each layout in the tree wraps its children
- * with a LayoutSegmentProvider that records the URL segment depth at that
- * level. This hook reads that depth from context and slices the pathname
- * segments accordingly.
+ * with a LayoutSegmentProvider that records the active segments at that
+ * level. This hook reads that array directly from context.
  *
  * @param parallelRoutesKey - Which parallel route to read (default: "children")
  */
 export function useSelectedLayoutSegments(
   _parallelRoutesKey?: string,
 ): string[] {
-  const pathname = usePathname();
-  const depth = useLayoutSegmentDepth();
-  const segments = pathname.split("/").filter(Boolean);
-  return segments.slice(depth);
+  return useLayoutSegments();
 }
 
 /**
