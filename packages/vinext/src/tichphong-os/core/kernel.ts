@@ -85,6 +85,13 @@ export class TichPhongSystemKernel {
             version: '1.0'
         };
 
+        // Capture authoritative server-emitted events if inside a Server Action scope
+        if (event.authority === 'server') {
+            import('../sync/server-action-context.js')
+                .then(m => m.addServerActionEvent(event))
+                .catch(err => console.error('[TP-OS] Failed to capture Server Action event:', err));
+        }
+
         // Phân phối sự kiện
         this.dispatch(event);
     }

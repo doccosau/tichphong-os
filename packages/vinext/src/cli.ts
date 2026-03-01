@@ -160,21 +160,63 @@ function buildViteConfig(overrides: Record<string, unknown> = {}) {
     root: process.cwd(),
     configFile: false,
     plugins: [vinext()],
-    // Deduplicate React packages to prevent "Invalid hook call" errors
-    // when vinext is symlinked (bun link / npm link) and both vinext's
-    // and the project's node_modules contain React.
-    resolve: {
-      dedupe: [
-        "react",
-        "react-dom",
-        "react/jsx-runtime",
-        "react/jsx-dev-runtime",
-      ],
-    },
     ...overrides,
   };
 
   return config;
+}
+
+function generateEnvTypes() {
+  const envPath = path.join(process.cwd(), "vinext-env.d.ts");
+  const dtsContent = `/// <reference types="vite/client" />
+
+declare module "next" {
+  export * from "vinext/shims/index";
+}
+declare module "next/router" {
+  export * from "vinext/shims/router";
+  export { default } from "vinext/shims/router";
+}
+declare module "next/link" {
+  export * from "vinext/shims/link";
+  export { default } from "vinext/shims/link";
+}
+declare module "next/image" {
+  export * from "vinext/shims/image";
+  export { default } from "vinext/shims/image";
+}
+declare module "next/head" {
+  export * from "vinext/shims/head";
+  export { default } from "vinext/shims/head";
+}
+declare module "next/document" {
+  export * from "vinext/shims/document";
+  export { default } from "vinext/shims/document";
+}
+declare module "next/navigation" {
+  export * from "vinext/shims/navigation";
+}
+declare module "next/headers" {
+  export * from "vinext/shims/headers";
+}
+declare module "next/cache" {
+  export * from "vinext/shims/cache";
+}
+declare module "next/server" {
+  export * from "vinext/shims/server";
+}
+`;
+  try {
+    const existing = fs.readFileSync(envPath, "utf-8");
+    if (existing === dtsContent) return;
+  } catch (e) {
+    // Ignore read errors
+  }
+  try {
+    fs.writeFileSync(envPath, dtsContent);
+  } catch (e) {
+    // Ignore write errors (e.g. read-only filesystem)
+  }
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
@@ -182,6 +224,8 @@ function buildViteConfig(overrides: Record<string, unknown> = {}) {
 async function dev() {
   const parsed = parseArgs(rawArgs);
   if (parsed.help) return printHelp("dev");
+
+  generateEnvTypes();
 
   loadDotenv({
     root: process.cwd(),
@@ -207,6 +251,8 @@ async function dev() {
 async function buildApp() {
   const parsed = parseArgs(rawArgs);
   if (parsed.help) return printHelp("build");
+
+  generateEnvTypes();
 
   loadDotenv({
     root: process.cwd(),
@@ -326,9 +372,9 @@ async function lint() {
     } else {
       console.log(
         "  No linter found. Install eslint or oxlint:\n\n" +
-          "    npm install -D eslint eslint-config-next\n" +
-          "    # or\n" +
-          "    npm install -D oxlint\n",
+        "    npm install -D eslint eslint-config-next\n" +
+        "    # or\n" +
+        "    npm install -D oxlint\n",
       );
       process.exit(1);
     }

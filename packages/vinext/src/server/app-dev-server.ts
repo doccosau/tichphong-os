@@ -1520,8 +1520,11 @@ async function _handleRequest(request) {
       const action = await loadServerAction(actionId);
       let returnValue;
       let actionRedirect = null;
+      let capturedEvents: import("../tichphong-os/core/types.js").KernelEvent[] = [];
       try {
-        const data = await action.apply(null, args);
+        const data = await import("../tichphong-os/sync/server-action-context.js").then((m) =>
+          m.serverActionSyncStorage.run(capturedEvents, () => action.apply(null, args))
+        );
         returnValue = { ok: true, data };
       } catch (e) {
         // Detect redirect() / permanentRedirect() called inside the action.
@@ -1571,6 +1574,9 @@ async function _handleRequest(request) {
           "x-action-redirect-type": actionRedirect.type,
           "x-action-redirect-status": String(actionRedirect.status),
         });
+        if (capturedEvents.length > 0) {
+          redirectHeaders.set("x-tichphong-sync-events", Buffer.from(JSON.stringify(capturedEvents)).toString("base64"));
+        }
         for (const cookie of actionPendingCookies) {
           redirectHeaders.append("Set-Cookie", cookie);
         }
@@ -1608,6 +1614,11 @@ async function _handleRequest(request) {
 
       const actionHeaders = { "Content-Type": "text/x-component; charset=utf-8", "Vary": "RSC, Accept" };
       const actionResponse = new Response(rscStream, { headers: actionHeaders });
+      
+      if (capturedEvents.length > 0) {
+        actionResponse.headers.set("x-tichphong-sync-events", Buffer.from(JSON.stringify(capturedEvents)).toString("base64"));
+      }
+      
       if (actionPendingCookies.length > 0 || actionDraftCookie) {
         for (const cookie of actionPendingCookies) {
           actionResponse.headers.append("Set-Cookie", cookie);

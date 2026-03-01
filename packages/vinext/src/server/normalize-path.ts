@@ -49,6 +49,11 @@ export function normalizePath(pathname: string): string {
     }
   }
 
-  return "/" + resolved.join("/");
+  const normalized = "/" + resolved.join("/");
+  // Preserve trailing slash if present in the original pathname (and it's not just "/")
+  if (pathname !== "/" && pathname.endsWith("/") && normalized !== "/") {
+    return normalized + "/";
+  }
+  return normalized;
 }
 

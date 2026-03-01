@@ -639,10 +639,10 @@ export default function vinext(options: VinextOptions = {}): Plugin[] {
     // Serialize i18n config for embedding in the server entry
     const i18nConfigJson = nextConfig?.i18n
       ? JSON.stringify({
-          locales: nextConfig.i18n.locales,
-          defaultLocale: nextConfig.i18n.defaultLocale,
-          localeDetection: nextConfig.i18n.localeDetection,
-        })
+        locales: nextConfig.i18n.locales,
+        defaultLocale: nextConfig.i18n.defaultLocale,
+        localeDetection: nextConfig.i18n.localeDetection,
+      })
       : "null";
 
     // Serialize the full resolved config for the production server.
@@ -2357,9 +2357,55 @@ hydrate();
                   res.end("Only relative URLs allowed");
                   return;
                 }
-                res.writeHead(302, { Location: imgUrl });
-                res.end();
-                return;
+
+                try {
+                  // @ts-ignore
+                  const sharp = (await import("sharp")).default;
+                  const imgRes = await fetch(resolvedImg.href, {
+                    headers: {
+                      "Cookie": req.headers.cookie || "",
+                      "Authorization": req.headers.authorization || ""
+                    }
+                  });
+                  if (!imgRes.ok) {
+                    res.writeHead(imgRes.status === 404 ? 404 : 502);
+                    res.end(imgRes.status === 404 ? "Image not found" : "Bad Gateway fetching image");
+                    return;
+                  }
+
+                  const imgBuffer = await imgRes.arrayBuffer();
+                  const widthStr = imgParams.get("w");
+                  const width = widthStr ? parseInt(widthStr, 10) : undefined;
+                  const qualityStr = imgParams.get("q");
+                  const quality = qualityStr ? parseInt(qualityStr, 10) : 75;
+
+                  const accept = req.headers.accept || "";
+                  let format = "jpeg";
+                  if (accept.includes("image/avif")) format = "avif";
+                  else if (accept.includes("image/webp")) format = "webp";
+                  else if (imgRes.headers.get("content-type") === "image/png") format = "png";
+
+                  let pipeline = sharp(Buffer.from(imgBuffer));
+                  if (width && width > 0) pipeline = pipeline.resize({ width, withoutEnlargement: true });
+
+                  if (format === "avif") pipeline = pipeline.avif({ quality });
+                  else if (format === "webp") pipeline = pipeline.webp({ quality });
+                  else if (format === "png") pipeline = pipeline.png({ quality });
+                  else pipeline = pipeline.jpeg({ quality, progressive: true });
+
+                  const optimizedBuffer = await pipeline.toBuffer();
+                  res.writeHead(200, {
+                    "Content-Type": "image/" + format,
+                    "Cache-Control": "public, max-age=3600"
+                  });
+                  res.end(optimizedBuffer);
+                  return;
+                } catch (err) {
+                  console.warn("[\x1b[36mTichPhong OS\x1b[0m] Local Image Optimizer failed (is sharp installed?), falling back to redirect.", err);
+                  res.writeHead(302, { Location: imgUrl });
+                  res.end();
+                  return;
+                }
               }
 
               // Vite's built-in middleware may rewrite "/" to "/index.html".
@@ -3202,7 +3248,7 @@ hydrate();
               const candidate = path.join(distDir, entry);
               if (entry === "client") continue;
               if (fs.statSync(candidate).isDirectory() &&
-                  fs.existsSync(path.join(candidate, "wrangler.json"))) {
+                fs.existsSync(path.join(candidate, "wrangler.json"))) {
                 workerOutDir = candidate;
                 break;
               }

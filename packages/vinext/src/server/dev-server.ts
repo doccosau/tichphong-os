@@ -284,6 +284,19 @@ export function createSSRHandler(
 ) {
   console.log(`\x1b[36m[TichPhong OS]\x1b[0m Booting System Kernel in Development Mode...`);
   const kernel = TichPhongSystemKernel.getInstance();
+
+  // Auto-wire KV Cache Handler if present in development
+  __getCloudflareProxy().then((cfProxy) => {
+    if (cfProxy?.env?.VINEXT_CACHE) {
+      import("../shims/cache.js").then(({ setCacheHandler }) => {
+        import("../cloudflare/kv-cache-handler.js").then(({ KVCacheHandler }) => {
+          setCacheHandler(new KVCacheHandler(cfProxy.env.VINEXT_CACHE));
+          console.log(`\x1b[36m[TichPhong OS]\x1b[0m Edge-Native KV Cache auto-wired.`);
+        });
+      });
+    }
+  });
+
   console.log(`\x1b[36m[TichPhong OS]\x1b[0m Kernel ready. Igniting Vinext Render Engine...`);
 
   return async (

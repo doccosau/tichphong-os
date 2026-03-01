@@ -58,16 +58,16 @@ export interface DeployOptions {
 
 /** Deploy command flag definitions for util.parseArgs. */
 const deployArgOptions = {
-  help:               { type: "boolean", short: "h", default: false },
-  preview:            { type: "boolean", default: false },
-  env:                { type: "string" },
-  name:               { type: "string" },
-  "skip-build":       { type: "boolean", default: false },
-  "dry-run":          { type: "boolean", default: false },
+  help: { type: "boolean", short: "h", default: false },
+  preview: { type: "boolean", default: false },
+  env: { type: "string" },
+  name: { type: "string" },
+  "skip-build": { type: "boolean", default: false },
+  "dry-run": { type: "boolean", default: false },
   "experimental-tpr": { type: "boolean", default: false },
-  "tpr-coverage":     { type: "string" },
-  "tpr-limit":        { type: "string" },
-  "tpr-window":       { type: "string" },
+  "tpr-coverage": { type: "string" },
+  "tpr-limit": { type: "string" },
+  "tpr-window": { type: "string" },
 } as const;
 
 export function parseDeployArgs(args: string[]) {
@@ -392,9 +392,12 @@ export function generateAppRouterWorkerEntry(): string {
  * directly in wrangler.jsonc: "main": "vinext/server/app-router-entry"
  */
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
+import { setCacheHandler } from "vinext/shims/cache";
+import { KVCacheHandler } from "vinext/cloudflare";
 import handler from "vinext/server/app-router-entry";
 
 interface Env {
+  VINEXT_CACHE?: any;
   ASSETS: Fetcher;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -407,6 +410,9 @@ interface Env {
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (env.VINEXT_CACHE) {
+      setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE));
+    }
     const url = new URL(request.url);
 
     // Image optimization via Cloudflare Images binding.
@@ -448,8 +454,11 @@ import {
 
 // @ts-expect-error -- virtual module resolved by vinext at build time
 import { renderPage, handleApiRoute, runMiddleware, vinextConfig } from "virtual:vinext-server-entry";
+import { setCacheHandler } from "vinext/shims/cache";
+import { KVCacheHandler } from "vinext/cloudflare";
 
 interface Env {
+  VINEXT_CACHE?: any;
   ASSETS: Fetcher;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -469,6 +478,9 @@ const configHeaders = vinextConfig?.headers ?? [];
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    if (env.VINEXT_CACHE) {
+      setCacheHandler(new KVCacheHandler(env.VINEXT_CACHE));
+    }
     try {
       const url = new URL(request.url);
       let pathname = url.pathname;
