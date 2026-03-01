@@ -1,13 +1,23 @@
 # Security Policy
 
-https://www.cloudflare.com/disclosure
+TichPhong OS takes the security of our software products and services seriously.
+
+## Supported Versions
+
+Currently, the `vinext` module in TichPhong OS is actively maintained alongside the core OS updates.
 
 ## Reporting a Vulnerability
 
-* https://hackerone.com/cloudflare
-  * All Cloudflare products are in scope for reporting. If you submit a valid report on bounty-eligible assets through our disclosure program, we will transfer your report to our private bug bounty program and invite you as a participant.
-* `mailto:security@cloudflare.com`
-  * If you'd like to encrypt your message, please do so within the the body of the message. Our email system doesn't handle PGP-MIME well.
-  * https://www.cloudflare.com/gpg/security-at-cloudflare-pubkey-06A67236.txt
+If you believe you have found a security vulnerability in TichPhong OS or any of its modules, please report it to us directly.
 
-All abuse reports should be submitted to our Trust & Safety team through our dedicated page: https://www.cloudflare.com/abuse/
+**Please do not report security vulnerabilities through public GitHub issues.**
+
+Instead, please send an email to: `langtudatinh38135@gmail.com`
+
+Please include the following information in your report:
+- Type of vulnerability (e.g., XSS, SQLi, RCE)
+- Step-by-step instructions to reproduce the vulnerability
+- Proof-of-concept (PoC) or exploit code
+- The potential impact of the vulnerability
+
+We will make every effort to acknowledge your report within 48 hours and will work to resolve the issue promptly. All abuse reports should also be directed to the email above.
