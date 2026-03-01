@@ -33,6 +33,8 @@ export interface NextRewrite {
 export interface NextHeader {
   source: string;
   headers: Array<{ key: string; value: string }>;
+  has?: HasCondition[];
+  missing?: HasCondition[];
 }
 
 export interface NextI18nConfig {
@@ -410,9 +412,9 @@ function isMdxLoader(loaderPath: string): boolean {
   return (
     loaderPath.includes("mdx") &&
     (loaderPath.includes("@next") ||
-     loaderPath.includes("@mdx-js") ||
-     loaderPath.includes("mdx-js-loader") ||
-     loaderPath.includes("next-mdx"))
+      loaderPath.includes("@mdx-js") ||
+      loaderPath.includes("mdx-js-loader") ||
+      loaderPath.includes("next-mdx"))
   );
 }
 

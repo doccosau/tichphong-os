@@ -142,7 +142,7 @@ export function isSafeRegex(pattern: string): boolean {
 export function safeRegExp(pattern: string, flags?: string): RegExp | null {
   if (!isSafeRegex(pattern)) {
     console.warn(
-      `[\x1b[36mTichPhong OS\x1b[0m] Ignoring potentially unsafe regex pattern (ReDoS risk): ${pattern}\n` +
+      `[vinext] Ignoring potentially unsafe regex pattern (ReDoS risk): ${pattern}\n` +
       `  Patterns with nested quantifiers (e.g. (a+)+) can cause catastrophic backtracking.\n` +
       `  Simplify the pattern to avoid nested repetition.`,
     );
@@ -641,10 +641,10 @@ export async function proxyExternalRequest(
     upstreamResponse = await fetch(targetUrl.href, { ...init, signal: controller.signal });
   } catch (e: any) {
     if (e?.name === "AbortError") {
-      console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy timeout:", targetUrl.href);
+      console.error("[vinext] External rewrite proxy timeout:", targetUrl.href);
       return new Response("Gateway Timeout", { status: 504 });
     }
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy error:", e);
+    console.error("[vinext] External rewrite proxy error:", e);
     return new Response("Bad Gateway", { status: 502 });
   } finally {
     clearTimeout(timeout);
@@ -669,16 +669,27 @@ export async function proxyExternalRequest(
 /**
  * Apply custom header rules from next.config.js.
  * Returns an array of { key, value } pairs to set on the response.
+ *
+ * `ctx` is optional for backward compatibility with existing callers.
+ * When omitted, `has`/`missing` conditions are not evaluated.
  */
 export function matchHeaders(
   pathname: string,
   headers: NextHeader[],
+  ctx?: RequestContext,
 ): Array<{ key: string; value: string }> {
   const result: Array<{ key: string; value: string }> = [];
   for (const rule of headers) {
     const escaped = escapeHeaderSource(rule.source);
     const sourceRegex = safeRegExp("^" + escaped + "$");
     if (sourceRegex && sourceRegex.test(pathname)) {
+      // When no request context is available, skip has/missing checks
+      // and apply all path-matched rules unconditionally (backward compat).
+      if (ctx && (rule.has || rule.missing)) {
+        if (!checkHasConditions(rule.has, rule.missing, ctx)) {
+          continue;
+        }
+      }
       result.push(...rule.headers);
     }
   }

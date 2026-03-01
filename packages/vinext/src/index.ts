@@ -15,14 +15,24 @@ import {
   type ResolvedNextConfig,
   type NextRedirect,
   type NextRewrite,
+  type NextHeader,
 } from "./config/next-config.js";
 
-import { findMiddlewareFile, runMiddleware } from "./server/middleware.js";
+import { findMiddlewareFile, isProxyFile, runMiddleware } from "./server/middleware.js";
 import { generateSafeRegExpCode, generateMiddlewareMatcherCode, generateNormalizePathCode } from "./server/middleware-codegen.js";
 import { normalizePath } from "./server/normalize-path.js";
 import { findInstrumentationFile, runInstrumentation } from "./server/instrumentation.js";
 import { validateDevRequest } from "./server/dev-origin-check.js";
-import { safeRegExp, escapeHeaderSource, isExternalUrl, proxyExternalRequest } from "./config/config-matchers.js";
+import {
+  safeRegExp,
+  isExternalUrl,
+  proxyExternalRequest,
+  parseCookies,
+  matchHeaders,
+  matchRedirect,
+  matchRewrite,
+  type RequestContext,
+} from "./config/config-matchers.js";
 import { scanMetadataFiles } from "./server/metadata-routes.js";
 import { staticExportPages } from "./build/static-export.js";
 import tsconfigPaths from "vite-tsconfig-paths";
@@ -31,6 +41,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
 import fs from "node:fs";
+import commonjs from "vite-plugin-commonjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -628,10 +639,10 @@ export default function vinext(options: VinextOptions = {}): Plugin[] {
     // Serialize i18n config for embedding in the server entry
     const i18nConfigJson = nextConfig?.i18n
       ? JSON.stringify({
-        locales: nextConfig.i18n.locales,
-        defaultLocale: nextConfig.i18n.defaultLocale,
-        localeDetection: nextConfig.i18n.localeDetection,
-      })
+          locales: nextConfig.i18n.locales,
+          defaultLocale: nextConfig.i18n.defaultLocale,
+          localeDetection: nextConfig.i18n.localeDetection,
+        })
       : "null";
 
     // Serialize the full resolved config for the production server.
@@ -662,8 +673,15 @@ ${generateSafeRegExpCode("es5")}
 ${generateMiddlewareMatcherCode("es5")}
 
 export async function runMiddleware(request) {
-  var middlewareFn = middlewareModule.default || middlewareModule.middleware;
-  if (typeof middlewareFn !== "function") return { continue: true };
+  var isProxy = ${middlewarePath ? JSON.stringify(isProxyFile(middlewarePath)) : "false"};
+  var middlewareFn = isProxy
+    ? (middlewareModule.proxy ?? middlewareModule.default)
+    : (middlewareModule.middleware ?? middlewareModule.default);
+  if (typeof middlewareFn !== "function") {
+    var fileType = isProxy ? "Proxy" : "Middleware";
+    var expectedExport = isProxy ? "proxy" : "middleware";
+    throw new Error("The " + fileType + " file must export a function named \`" + expectedExport + "\` or a \`default\` function.");
+  }
 
   var config = middlewareModule.config;
   var matcher = config && config.matcher;
@@ -691,7 +709,7 @@ export async function runMiddleware(request) {
   var response;
   try { response = await middlewareFn(nextRequest); }
   catch (e) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] Middleware error:", e);
+    console.error("[vinext] Middleware error:", e);
     return { continue: false, response: new Response("Internal Server Error", { status: 500 }) };
   }
 
@@ -775,7 +793,7 @@ const pendingRegenerations = new Map();
 function triggerBackgroundRegeneration(key, renderFn) {
   if (pendingRegenerations.has(key)) return;
   const promise = renderFn()
-    .catch((err) => console.error("[\x1b[36mTichPhong OS\x1b[0m] ISR regen failed for " + key + ":", err))
+    .catch((err) => console.error("[vinext] ISR regen failed for " + key + ":", err))
     .finally(() => pendingRegenerations.delete(key));
   pendingRegenerations.set(key, promise);
 }
@@ -1422,7 +1440,7 @@ export async function renderPage(request, url, manifest) {
     }
     return new Response(compositeStream, { status: 200, headers: responseHeaders });
   } catch (e) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] SSR error:", e);
+    console.error("[vinext] SSR error:", e);
     return new Response("Internal Server Error", { status: 500 });
   }
           }) // end runWithFetchCache
@@ -1487,7 +1505,7 @@ export async function handleApiRoute(request, url) {
     res.end();
     return await responsePromise;
   } catch (e) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] API error:", e);
+    console.error("[vinext] API error:", e);
     return new Response("Internal Server Error", { status: 500 });
   }
 }
@@ -1538,21 +1556,21 @@ ${loaderEntries.join(",\n")}
 async function hydrate() {
   const nextData = window.__NEXT_DATA__;
   if (!nextData) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] No __NEXT_DATA__ found");
+    console.error("[vinext] No __NEXT_DATA__ found");
     return;
   }
 
   const { pageProps } = nextData.props;
   const loader = pageLoaders[nextData.page];
   if (!loader) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] No page loader for route:", nextData.page);
+    console.error("[vinext] No page loader for route:", nextData.page);
     return;
   }
 
   const pageModule = await loader();
   const PageComponent = pageModule.default;
   if (!PageComponent) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] Page module has no default export");
+    console.error("[vinext] Page module has no default export");
     return;
   }
 
@@ -1572,7 +1590,7 @@ async function hydrate() {
 
   const container = document.getElementById("__next");
   if (!container) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] No #__next element found");
+    console.error("[vinext] No #__next element found");
     return;
   }
 
@@ -1647,6 +1665,9 @@ hydrate();
     // Resolve tsconfig paths/baseUrl aliases so real-world Next.js repos
     // that use @/*, #/*, or baseUrl imports work out of the box.
     tsconfigPaths(),
+    // Transform CJS require()/module.exports to ESM before other plugins
+    // analyze imports (RSC directive scanning, shim resolution, etc.)
+    commonjs(),
     {
       name: "vinext:config",
       enforce: "pre",
@@ -1828,14 +1849,14 @@ hydrate();
             }
             mdxPlugins.push(mdxPlugin(mdxOpts));
             if (nextConfig.mdx) {
-              console.log("[\x1b[36mTichPhong OS\x1b[0m] Auto-injected @mdx-js/rollup with remark/rehype plugins from next.config");
+              console.log("[vinext] Auto-injected @mdx-js/rollup with remark/rehype plugins from next.config");
             } else {
-              console.log("[\x1b[36mTichPhong OS\x1b[0m] Auto-injected @mdx-js/rollup for MDX support");
+              console.log("[vinext] Auto-injected @mdx-js/rollup for MDX support");
             }
           } catch {
             // @mdx-js/rollup not installed — warn but don't fail
             console.warn(
-              "[\x1b[36mTichPhong OS\x1b[0m] MDX files detected but @mdx-js/rollup is not installed. " +
+              "[vinext] MDX files detected but @mdx-js/rollup is not installed. " +
               "Install it with: npm install -D @mdx-js/rollup"
             );
           }
@@ -2008,11 +2029,15 @@ hydrate();
             client: {
               optimizeDeps: {
                 exclude: ["vinext"],
-                // react and react-dom are framework dependencies used for
-                // hydration. They aren't crawled from app/ source files so
-                // must be pre-included to prevent late discovery and page
-                // reloads during development.
-                include: ["react", "react-dom", "react-dom/client"],
+                // React packages aren't crawled from app/ source files,
+                // so must be pre-included to avoid late discovery (#25).
+                include: [
+                  "react",
+                  "react-dom",
+                  "react-dom/client",
+                  "react/jsx-runtime",
+                  "react/jsx-dev-runtime",
+                ],
               },
               build: {
                 // When targeting Cloudflare Workers, enable manifest generation
@@ -2073,7 +2098,7 @@ hydrate();
           );
           if (rscRootPlugins.length > 1) {
             throw new Error(
-              "[\x1b[36mTichPhong OS\x1b[0m] Duplicate @vitejs/plugin-rsc detected.\n" +
+              "[vinext] Duplicate @vitejs/plugin-rsc detected.\n" +
               "         vinext auto-registers @vitejs/plugin-rsc when app/ is detected.\n" +
               "         Your config also registers it manually, which doubles build time.\n\n" +
               "         Fix: remove the explicit rsc() call from your plugins array.\n" +
@@ -2262,7 +2287,7 @@ hydrate();
         // Run instrumentation.ts register() if present (once at server startup)
         if (instrumentationPath) {
           runInstrumentation(server, instrumentationPath).catch((err) => {
-            console.error("[\x1b[36mTichPhong OS\x1b[0m] Instrumentation error:", err);
+            console.error("[vinext] Instrumentation error:", err);
           });
         }
 
@@ -2304,7 +2329,7 @@ hydrate();
                 nextConfig?.serverActionsAllowedOrigins,
               );
               if (blockReason) {
-                console.warn(`[\x1b[36mTichPhong OS\x1b[0m] Blocked dev request: ${blockReason} (${url})`);
+                console.warn(`[vinext] Blocked dev request: ${blockReason} (${url})`);
                 res.writeHead(403, { "Content-Type": "text/plain" });
                 res.end("Forbidden");
                 return;
@@ -2468,9 +2493,26 @@ hydrate();
                 }
               }
 
+              // Build request context once for has/missing condition checks
+              // across headers, redirects, and rewrites.
+              const reqUrl = new URL(url, `http://${req.headers.host || "localhost"}`);
+              const reqCtxHeaders = new Headers(
+                Object.fromEntries(
+                  Object.entries(req.headers)
+                    .filter(([, v]) => v !== undefined)
+                    .map(([k, v]) => [k, Array.isArray(v) ? v.join(", ") : String(v)])
+                ),
+              );
+              const reqCtx: RequestContext = {
+                headers: reqCtxHeaders,
+                cookies: parseCookies(reqCtxHeaders.get("cookie")),
+                query: reqUrl.searchParams,
+                host: reqCtxHeaders.get("host") ?? reqUrl.host,
+              };
+
               // Apply custom headers from next.config.js
               if (nextConfig?.headers.length) {
-                applyHeaders(pathname, res, nextConfig.headers);
+                applyHeaders(pathname, res, nextConfig.headers, reqCtx);
               }
 
               // Apply redirects from next.config.js
@@ -2479,6 +2521,7 @@ hydrate();
                   pathname,
                   res,
                   nextConfig.redirects,
+                  reqCtx,
                 );
                 if (redirected) return;
               }
@@ -2487,7 +2530,7 @@ hydrate();
               let resolvedUrl = url;
               if (nextConfig?.rewrites.beforeFiles.length) {
                 resolvedUrl =
-                  applyRewrites(pathname, nextConfig.rewrites.beforeFiles) ??
+                  applyRewrites(pathname, nextConfig.rewrites.beforeFiles, reqCtx) ??
                   url;
               }
 
@@ -2528,6 +2571,7 @@ hydrate();
                 const afterRewrite = applyRewrites(
                   resolvedUrl.split("?")[0],
                   nextConfig.rewrites.afterFiles,
+                  reqCtx,
                 );
                 if (afterRewrite) resolvedUrl = afterRewrite;
               }
@@ -2553,6 +2597,7 @@ hydrate();
                 const fallbackRewrite = applyRewrites(
                   resolvedUrl.split("?")[0],
                   nextConfig.rewrites.fallback,
+                  reqCtx,
                 );
                 if (fallbackRewrite) {
                   // External fallback rewrite — proxy to external URL
@@ -3157,7 +3202,7 @@ hydrate();
               const candidate = path.join(distDir, entry);
               if (entry === "client") continue;
               if (fs.statSync(candidate).isDirectory() &&
-                fs.existsSync(path.join(candidate, "wrangler.json"))) {
+                  fs.existsSync(path.join(candidate, "wrangler.json"))) {
                 workerOutDir = candidate;
                 break;
               }
@@ -3398,22 +3443,15 @@ function applyRedirects(
   pathname: string,
   res: any,
   redirects: NextRedirect[],
+  ctx?: RequestContext,
 ): boolean {
-  for (const redirect of redirects) {
-    const params = matchConfigPattern(pathname, redirect.source);
-    if (params) {
-      let dest = redirect.destination;
-      for (const [key, value] of Object.entries(params)) {
-        dest = dest.replace(`:${key}*`, value);
-        dest = dest.replace(`:${key}+`, value);
-        dest = dest.replace(`:${key}`, value);
-      }
-      // Sanitize to prevent open redirect via protocol-relative URLs
-      dest = sanitizeDestinationLocal(dest);
-      res.writeHead(redirect.permanent ? 308 : 307, { Location: dest });
-      res.end();
-      return true;
-    }
+  const result = matchRedirect(pathname, redirects, ctx);
+  if (result) {
+    // Sanitize to prevent open redirect via protocol-relative URLs
+    const dest = sanitizeDestinationLocal(result.destination);
+    res.writeHead(result.permanent ? 308 : 307, { Location: dest });
+    res.end();
+    return true;
   }
   return false;
 }
@@ -3475,7 +3513,7 @@ async function proxyExternalRewriteNode(
       res.end();
     }
   } catch (e) {
-    console.error("[\x1b[36mTichPhong OS\x1b[0m] External rewrite proxy error:", e);
+    console.error("[vinext] External rewrite proxy error:", e);
     if (!res.headersSent) {
       res.writeHead(502);
       res.end("Bad Gateway");
@@ -3490,20 +3528,12 @@ async function proxyExternalRewriteNode(
 function applyRewrites(
   pathname: string,
   rewrites: NextRewrite[],
+  ctx?: RequestContext,
 ): string | null {
-  for (const rewrite of rewrites) {
-    const params = matchConfigPattern(pathname, rewrite.source);
-    if (params) {
-      let dest = rewrite.destination;
-      for (const [key, value] of Object.entries(params)) {
-        dest = dest.replace(`:${key}*`, value);
-        dest = dest.replace(`:${key}+`, value);
-        dest = dest.replace(`:${key}`, value);
-      }
-      // Sanitize to prevent open redirect via protocol-relative URLs
-      dest = sanitizeDestinationLocal(dest);
-      return dest;
-    }
+  const dest = matchRewrite(pathname, rewrites, ctx);
+  if (dest) {
+    // Sanitize to prevent open redirect via protocol-relative URLs
+    return sanitizeDestinationLocal(dest);
   }
   return null;
 }
@@ -3514,16 +3544,12 @@ function applyRewrites(
 function applyHeaders(
   pathname: string,
   res: any,
-  headers: Array<{ source: string; headers: Array<{ key: string; value: string }> }>,
+  headers: NextHeader[],
+  ctx?: RequestContext,
 ): void {
-  for (const rule of headers) {
-    const escaped = escapeHeaderSource(rule.source);
-    const sourceRegex = safeRegExp("^" + escaped + "$");
-    if (sourceRegex && sourceRegex.test(pathname)) {
-      for (const header of rule.headers) {
-        res.setHeader(header.key, header.value);
-      }
-    }
+  const matched = matchHeaders(pathname, headers, ctx);
+  for (const header of matched) {
+    res.setHeader(header.key, header.value);
   }
 }
 
@@ -3577,5 +3603,3 @@ export type { StaticExportResult, StaticExportOptions, AppStaticExportOptions } 
 export { clientManualChunks, clientOutputConfig, clientTreeshakeConfig, computeLazyChunks };
 export { resolvePostcssStringPlugins as _resolvePostcssStringPlugins };
 export { parseStaticObjectLiteral as _parseStaticObjectLiteral };
-
-export * as TichPhongOS from './tichphong-os/index.js';
