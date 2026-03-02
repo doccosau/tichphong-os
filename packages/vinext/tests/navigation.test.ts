@@ -8,8 +8,6 @@ import {
     toRscUrl,
     setNavigationContext,
     getNavigationContext,
-    stripBasePath,
-    withBasePath,
 } from "../src/shims/navigation.js";
 
 // ─── toRscUrl ─────────────────────────────────────────────────────────────────

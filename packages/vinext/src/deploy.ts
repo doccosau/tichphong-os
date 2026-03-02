@@ -88,7 +88,7 @@ export function parseDeployArgs(args: string[]) {
 
 // ─── Project Detection ──────────────────────────────────────────────────────
 
-interface ProjectInfo {
+export interface ProjectInfo {
   root: string;
   isAppRouter: boolean;
   isPagesRouter: boolean;

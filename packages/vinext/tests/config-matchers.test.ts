@@ -1,5 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { matchRedirect, matchHeaders } from "../src/config/config-matchers.js";
+import { matchRedirect, matchHeaders, type RequestContext } from "../src/config/config-matchers.js";
+
+const emptyCtx: RequestContext = {
+    cookies: {},
+    headers: new Headers(),
+    query: new URLSearchParams(),
+    host: "localhost",
+};
 
 describe("TichPhong OS Config Matchers", () => {
     describe("matchRedirect", () => {
@@ -8,7 +15,7 @@ describe("TichPhong OS Config Matchers", () => {
                 { source: "/old-blog", destination: "/blog/new", permanent: true },
             ];
 
-            const result = matchRedirect("/old-blog", redirects);
+            const result = matchRedirect("/old-blog", redirects, emptyCtx);
             expect(result).toBeDefined();
             expect(result?.destination).toBe("/blog/new");
             expect(result?.permanent).toBe(true);
@@ -18,7 +25,7 @@ describe("TichPhong OS Config Matchers", () => {
             const redirects = [
                 { source: "/old-blog", destination: "/blog/new", permanent: true },
             ];
-            const result = matchRedirect("/blog", redirects);
+            const result = matchRedirect("/blog", redirects, emptyCtx);
             expect(result).toBeNull();
         });
     });
@@ -34,7 +41,7 @@ describe("TichPhong OS Config Matchers", () => {
                 }
             ];
 
-            const matchedHeaders = matchHeaders("/api/v1/users", rules);
+            const matchedHeaders = matchHeaders("/api/v1/users", rules, emptyCtx);
             expect(matchedHeaders).toHaveLength(1);
             expect(matchedHeaders[0].key).toBe("x-tichphong-os");
             expect(matchedHeaders[0].value).toBe("active");
