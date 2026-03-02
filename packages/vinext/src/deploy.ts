@@ -419,6 +419,8 @@ export default {
     // The parseImageParams validation inside handleImageOptimization
     // normalizes backslashes and validates the origin hasn't changed.
     if (url.pathname === "/_vinext/image") {
+      // @ts-expect-error -- virtual module resolved by vinext at build time
+      const vinextConfig = (await import("virtual:vinext-server-entry")).vinextConfig;
       const allowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       return handleImageOptimization(request, {
         fetchAsset: (path) => env.ASSETS.fetch(new Request(new URL(path, request.url))),
@@ -426,7 +428,7 @@ export default {
           const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
           return result.response();
         },
-      }, allowedWidths);
+      }, allowedWidths, vinextConfig?.images);
     }
 
     // Delegate everything else to vinext
@@ -510,7 +512,7 @@ export default {
             const result = await env.IMAGES.input(body).transform(width > 0 ? { width } : {}).output({ format, quality });
             return result.response();
           },
-        }, allowedWidths);
+        }, allowedWidths, vinextConfig?.images);
       }
 
       // ── 2. Trailing slash normalization ────────────────────────────
@@ -610,7 +612,7 @@ export default {
 
       // ── 4. Apply custom headers from next.config.js ───────────────
       if (configHeaders.length) {
-        const matched = matchHeaders(resolvedPathname, configHeaders);
+        const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
         for (const h of matched) {
           middlewareHeaders[h.key.toLowerCase()] = h.value;
         }

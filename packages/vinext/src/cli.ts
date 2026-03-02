@@ -328,14 +328,14 @@ async function start() {
   )) as {
     startProdServer: (opts: {
       port: number;
-      host: string;
+      hostname: string;
       outDir: string;
     }) => Promise<unknown>;
   };
 
   await startProdServer({
     port,
-    host,
+    hostname: host,
     outDir: path.resolve(process.cwd(), "dist"),
   });
 }
@@ -415,6 +415,21 @@ async function check() {
 
   const result = runCheck(root);
   console.log(formatReport(result));
+}
+
+async function analyzeCommand() {
+  const parsed = parseArgs(rawArgs);
+  if (parsed.help) return printHelp("analyze");
+
+  const { analyzeBuild, printBundleReport } = await import("./cli/analyze.js");
+  const outDir = path.resolve("dist");
+  try {
+    const report = analyzeBuild(outDir);
+    printBundleReport(report);
+  } catch (e) {
+    console.error(`\n  ${(e as Error).message}\n`);
+    process.exit(1);
+  }
 }
 
 async function initCommand() {
@@ -598,6 +613,7 @@ function printHelp(cmd?: string) {
     build    Build for production
     start    Start production server
     deploy   Deploy to Cloudflare Workers
+    analyze  Analyze bundle size
     init     Migrate a Next.js project to vinext
     check    Scan Next.js app for compatibility
     lint     Run linter
@@ -612,6 +628,7 @@ function printHelp(cmd?: string) {
     vinext build                Build for production
     vinext start                Start production server
     vinext deploy               Deploy to Cloudflare Workers
+    vinext analyze              Analyze bundle size
     vinext init                 Migrate a Next.js project
     vinext check                Check compatibility
     vinext lint                 Run linter
@@ -679,6 +696,13 @@ switch (command) {
 
   case "lint":
     lint().catch((e) => {
+      console.error(e);
+      process.exit(1);
+    });
+    break;
+
+  case "analyze":
+    analyzeCommand().catch((e) => {
       console.error(e);
       process.exit(1);
     });

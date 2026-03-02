@@ -1,6 +1,6 @@
 {
   "name": "vinext",
-  "version": "0.0.5",
+  "version": "0.1.0",
   "description": "Run Next.js apps on Vite. Drop-in replacement for the next CLI.",
   "license": "MIT",
   "repository": {
@@ -48,6 +48,46 @@
     "./routing/*": {
       "import": "./dist/routing/*.js",
       "types": "./dist/routing/*.d.ts"
+    },
+    "./seo": {
+      "import": "./dist/seo/index.js",
+      "types": "./dist/seo/index.d.ts"
+    },
+    "./seo/*": {
+      "import": "./dist/seo/*.js",
+      "types": "./dist/seo/*.d.ts"
+    },
+    "./pwa": {
+      "import": "./dist/pwa/index.js",
+      "types": "./dist/pwa/index.d.ts"
+    },
+    "./server/api-middleware": {
+      "import": "./dist/server/api-middleware.js",
+      "types": "./dist/server/api-middleware.d.ts"
+    },
+    "./server/security-headers": {
+      "import": "./dist/server/security-headers.js",
+      "types": "./dist/server/security-headers.d.ts"
+    },
+    "./server/rate-limit": {
+      "import": "./dist/server/rate-limit.js",
+      "types": "./dist/server/rate-limit.d.ts"
+    },
+    "./admin": {
+      "import": "./dist/admin/dashboard-handler.js",
+      "types": "./dist/admin/dashboard-handler.d.ts"
+    },
+    "./utils/logger": {
+      "import": "./dist/utils/logger.js",
+      "types": "./dist/utils/logger.d.ts"
+    },
+    "./telemetry": {
+      "import": "./dist/telemetry/index.js",
+      "types": "./dist/telemetry/index.d.ts"
+    },
+    "./edge": {
+      "import": "./dist/edge/index.js",
+      "types": "./dist/edge/index.d.ts"
     }
   },
   "files": [

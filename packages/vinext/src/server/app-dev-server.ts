@@ -917,7 +917,7 @@ ${generateNormalizePathCode("modern")}
 
 // ── Config pattern matching (redirects, rewrites, headers) ──────────────
 function __matchConfigPattern(pathname, pattern) {
-  if (pattern.includes("(") || pattern.includes("\\\\") || /:[\\w-]+[*+][^/]/.test(pattern)) {
+  if (pattern.includes("(") || pattern.includes("\\\\") || /:[\\w-]+[*+][^/]/.test(pattern) || /:[\\w-]+\\./.test(pattern)) {
     try {
       const paramNames = [];
       const regexStr = pattern
@@ -1398,32 +1398,47 @@ async function _handleRequest(request) {
         }
       });
       if (!__imgRes.ok) return new Response(__imgRes.status === 404 ? "Image not found" : "Bad Gateway fetching image", { status: __imgRes.status === 404 ? 404 : 502 });
-      
+
       const __imgBuffer = await __imgRes.arrayBuffer();
       const __widthStr = url.searchParams.get("w");
       const __width = __widthStr ? parseInt(__widthStr, 10) : undefined;
       const __qualityStr = url.searchParams.get("q");
       const __quality = __qualityStr ? parseInt(__qualityStr, 10) : 75;
-      
+
       const __accept = request.headers.get("accept") || "";
       let __format = "jpeg";
       if (__accept.includes("image/avif")) __format = "avif";
       else if (__accept.includes("image/webp")) __format = "webp";
       else if (__imgRes.headers.get("content-type") === "image/png") __format = "png";
-      
+      else if (__imgRes.headers.get("content-type") === "image/svg+xml") {
+         if (__nextConfig?.images?.dangerouslyAllowSVG) {
+            return new Response(__imgBuffer, {
+              headers: {
+                "Content-Type": "image/svg+xml",
+                "Cache-Control": "public, max-age=3600",
+                "Content-Security-Policy": __nextConfig?.images?.contentSecurityPolicy || "script-src 'none'; frame-src 'none'; sandbox;",
+                "Content-Disposition": __nextConfig?.images?.contentDispositionType === "inline" ? "inline" : "attachment"
+              }
+            });
+         }
+         return new Response("SVG images are not allowed", { status: 400 });
+      }
+
       let __pipeline = sharp(Buffer.from(__imgBuffer));
       if (__width && __width > 0) __pipeline = __pipeline.resize({ width: __width, withoutEnlargement: true });
-      
+
       if (__format === "avif") __pipeline = __pipeline.avif({ quality: __quality });
       else if (__format === "webp") __pipeline = __pipeline.webp({ quality: __quality });
       else if (__format === "png") __pipeline = __pipeline.png({ quality: __quality });
       else __pipeline = __pipeline.jpeg({ quality: __quality, progressive: true });
-      
+
       const __optimizedBuffer = await __pipeline.toBuffer();
       return new Response(__optimizedBuffer, {
         headers: {
           "Content-Type": "image/" + __format,
-          "Cache-Control": "public, max-age=3600"
+          "Cache-Control": "public, max-age=3600",
+          "Content-Security-Policy": __nextConfig?.images?.contentSecurityPolicy || "script-src 'none'; frame-src 'none'; sandbox;",
+          "Content-Disposition": __nextConfig?.images?.contentDispositionType === "attachment" ? "attachment" : "inline"
         }
       });
     } catch(err) {
@@ -1651,6 +1666,15 @@ async function _handleRequest(request) {
   if (__configRewrites.afterFiles && __configRewrites.afterFiles.length) {
     const __afterRewritten = __applyConfigRewrites(cleanPathname, __configRewrites.afterFiles, __reqCtx);
     if (__afterRewritten) {
+      if (cleanPathname.includes(".")) {
+        const __publicFilePath = appDir.replace(/app$/, "public") + __afterRewritten;
+        if (fs.existsSync(__publicFilePath) && fs.statSync(__publicFilePath).isFile()) {
+          const __ext = (__afterRewritten.split(".").pop() ?? "").toLowerCase();
+          const __mimeTypes = { html:"text/html; charset=utf-8", htm:"text/html; charset=utf-8", css:"text/css", js:"application/javascript", mjs:"application/javascript", json:"application/json", txt:"text/plain", xml:"application/xml", svg:"image/svg+xml", png:"image/png", jpg:"image/jpeg", jpeg:"image/jpeg", gif:"image/gif", webp:"image/webp", avif:"image/avif", ico:"image/x-icon", woff:"font/woff", woff2:"font/woff2", ttf:"font/ttf", otf:"font/otf", pdf:"application/pdf" };
+          return new Response(fs.readFileSync(__publicFilePath), { status: 200, headers: { "Content-Type": __mimeTypes[__ext] ?? "application/octet-stream" } });
+        }
+      }
+
       if (__isExternalUrl(__afterRewritten)) {
         setHeadersContext(null);
         setNavigationContext(null);

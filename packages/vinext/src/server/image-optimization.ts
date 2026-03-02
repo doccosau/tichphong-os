@@ -144,10 +144,19 @@ export function isSafeImageContentType(contentType: string | null): boolean {
  * These headers are set on every response from the image endpoint,
  * regardless of whether the image was transformed or served as-is.
  */
-function setImageSecurityHeaders(headers: Headers): void {
-  headers.set("Content-Security-Policy", IMAGE_CONTENT_SECURITY_POLICY);
+function setImageSecurityHeaders(
+  headers: Headers,
+  config?: { contentSecurityPolicy?: string; contentDispositionType?: "inline" | "attachment" },
+): void {
+  headers.set(
+    "Content-Security-Policy",
+    config?.contentSecurityPolicy || IMAGE_CONTENT_SECURITY_POLICY,
+  );
   headers.set("X-Content-Type-Options", "nosniff");
-  headers.set("Content-Disposition", "inline");
+  headers.set(
+    "Content-Disposition",
+    config?.contentDispositionType === "attachment" ? "attachment" : "inline",
+  );
 }
 
 /**
@@ -175,6 +184,11 @@ export async function handleImageOptimization(
   request: Request,
   handlers: ImageHandlers,
   allowedWidths?: number[],
+  imageConfig?: {
+    dangerouslyAllowSVG?: boolean;
+    contentSecurityPolicy?: string;
+    contentDispositionType?: "inline" | "attachment";
+  },
 ): Promise<Response> {
   const url = new URL(request.url);
   const params = parseImageParams(url, allowedWidths);
@@ -198,7 +212,30 @@ export async function handleImageOptimization(
   // Check the source Content-Type before any processing — if the source is
   // an SVG or other non-image type, reject it regardless of transformation.
   const sourceContentType = source.headers.get("Content-Type");
-  if (!isSafeImageContentType(sourceContentType)) {
+  if (sourceContentType === "image/svg+xml") {
+    if (imageConfig?.dangerouslyAllowSVG) {
+      // SVG allowed: bypass sharp transformation and serve directly
+      // Default CSP blocks scripts unless overridden in config
+      const headers = new Headers(source.headers);
+      headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
+      // CSP prevents <script> execution when svg is viewed directly
+      headers.set(
+        "Content-Security-Policy",
+        imageConfig.contentSecurityPolicy || "script-src 'none'; frame-src 'none'; sandbox;",
+      );
+      // Attachment disposition forces download instead of inline rendering
+      // if the user configured it, otherwise Next.js defaults to inline or
+      // attachment depending on version. We align with the user config.
+      headers.set(
+        "Content-Disposition",
+        imageConfig.contentDispositionType === "inline" ? "inline" : "attachment",
+      );
+      headers.set("X-Content-Type-Options", "nosniff");
+      return new Response(source.body, { status: 200, headers });
+    } else {
+      return new Response("SVG images are not allowed", { status: 400 });
+    }
+  } else if (!isSafeImageContentType(sourceContentType)) {
     return new Response("The requested resource is not an allowed image type", { status: 400 });
   }
 
@@ -213,7 +250,7 @@ export async function handleImageOptimization(
       const headers = new Headers(transformed.headers);
       headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
       headers.set("Vary", "Accept");
-      setImageSecurityHeaders(headers);
+      setImageSecurityHeaders(headers, imageConfig);
 
       // Verify the transformed response also has a safe Content-Type.
       // A malicious or buggy transform handler could return HTML.
@@ -232,6 +269,6 @@ export async function handleImageOptimization(
   const headers = new Headers(source.headers);
   headers.set("Cache-Control", IMAGE_CACHE_CONTROL);
   headers.set("Vary", "Accept");
-  setImageSecurityHeaders(headers);
+  setImageSecurityHeaders(headers, imageConfig);
   return new Response(source.body, { status: 200, headers });
 }

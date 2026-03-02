@@ -190,7 +190,10 @@ export function headersContextFromRequest(request: Request): HeadersContext {
     }
   }
   return {
-    headers: request.headers,
+    // Copy into a mutable Headers instance. In Cloudflare Workers the original
+    // Request.headers is immutable; applyMiddlewareRequestHeaders() needs to
+    // call .set() on this object after middleware runs.
+    headers: new Headers(request.headers),
     cookies,
   };
 }
@@ -209,7 +212,7 @@ export async function headers(): Promise<Headers> {
   if (!state.headersContext) {
     throw new Error(
       "headers() can only be called from a Server Component, Route Handler, " +
-        "or Server Action. Make sure you're not calling it from a Client Component.",
+      "or Server Action. Make sure you're not calling it from a Client Component.",
     );
   }
   markDynamicUsage();
@@ -225,7 +228,7 @@ export async function cookies(): Promise<RequestCookies> {
   if (!state.headersContext) {
     throw new Error(
       "cookies() can only be called from a Server Component, Route Handler, " +
-        "or Server Action.",
+      "or Server Action.",
     );
   }
   markDynamicUsage();
@@ -261,7 +264,7 @@ function getDraftSecret(): string {
   if (!secret) {
     throw new Error(
       "[\x1b[36mTichPhong OS\x1b[0m] __VINEXT_DRAFT_SECRET is not defined. " +
-        "This should be set by the Vite plugin at build time.",
+      "This should be set by the Vite plugin at build time.",
     );
   }
   return secret;

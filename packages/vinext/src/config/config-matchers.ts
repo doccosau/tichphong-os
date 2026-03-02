@@ -375,7 +375,8 @@ export function matchConfigPattern(
   if (
     pattern.includes("(") ||
     pattern.includes("\\") ||
-    /:[\w-]+[*+][^/]/.test(pattern)
+    /:[\w-]+[*+][^/]/.test(pattern) ||
+    /:[\w-]+\./.test(pattern)
   ) {
     try {
       // Param names may contain hyphens (e.g. :auth-method, :sign-in).
@@ -473,13 +474,12 @@ export function matchConfigPattern(
 export function matchRedirect(
   pathname: string,
   redirects: NextRedirect[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): { destination: string; permanent: boolean } | null {
   for (const redirect of redirects) {
     const params = matchConfigPattern(pathname, redirect.source);
     if (params) {
-      // Check has/missing conditions if present and context is available
-      if (ctx && (redirect.has || redirect.missing)) {
+      if (redirect.has || redirect.missing) {
         if (!checkHasConditions(redirect.has, redirect.missing, ctx)) {
           continue;
         }
@@ -510,13 +510,12 @@ export function matchRedirect(
 export function matchRewrite(
   pathname: string,
   rewrites: NextRewrite[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): string | null {
   for (const rewrite of rewrites) {
     const params = matchConfigPattern(pathname, rewrite.source);
     if (params) {
-      // Check has/missing conditions if present and context is available
-      if (ctx && (rewrite.has || rewrite.missing)) {
+      if (rewrite.has || rewrite.missing) {
         if (!checkHasConditions(rewrite.has, rewrite.missing, ctx)) {
           continue;
         }
@@ -676,16 +675,14 @@ export async function proxyExternalRequest(
 export function matchHeaders(
   pathname: string,
   headers: NextHeader[],
-  ctx?: RequestContext,
+  ctx: RequestContext,
 ): Array<{ key: string; value: string }> {
   const result: Array<{ key: string; value: string }> = [];
   for (const rule of headers) {
     const escaped = escapeHeaderSource(rule.source);
     const sourceRegex = safeRegExp("^" + escaped + "$");
     if (sourceRegex && sourceRegex.test(pathname)) {
-      // When no request context is available, skip has/missing checks
-      // and apply all path-matched rules unconditionally (backward compat).
-      if (ctx && (rule.has || rule.missing)) {
+      if (rule.has || rule.missing) {
         if (!checkHasConditions(rule.has, rule.missing, ctx)) {
           continue;
         }

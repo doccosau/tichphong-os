@@ -29,6 +29,16 @@ import { IMAGE_OPTIMIZATION_PATH, IMAGE_CONTENT_SECURITY_POLICY, parseImageParam
 import { normalizePath } from "./normalize-path.js";
 import { computeLazyChunks } from "../index.js";
 import { TichPhongSystemKernel } from "../tichphong-os/core/kernel.js";
+import { checkRateLimit, getClientIP } from "./rate-limit.js";
+import { metrics } from "../tichphong-os/modules/system/services/metrics.js";
+import { handleAdminDashboard } from "../admin/dashboard-handler.js";
+import { getSecurityHeaders } from "./security-headers.js";
+import { generateSitemap } from "../seo/sitemap.js";
+import { generateRobotsTxt } from "../seo/robots.js";
+import { generateManifest, generateServiceWorker } from "../pwa/index.js";
+
+/** Lazily computed security headers for dynamic responses. */
+const securityHeaders = getSecurityHeaders();
 
 /** Convert a Node.js IncomingMessage into a ReadableStream for Web Request body. */
 function readNodeStream(req: IncomingMessage): ReadableStream<Uint8Array> {
@@ -45,11 +55,73 @@ export interface ProdServerOptions {
   /** Port to listen on */
   port?: number;
   /** Host to bind to */
-  host?: string;
+  hostname?: string;
   /** Path to the build output directory */
   outDir?: string;
-  /** Disable compression (default: false) */
+  /** Disable response compression */
   noCompression?: boolean;
+}
+
+// ─── Server Lifecycle ─────────────────────────────────────────────────────────
+
+/** Server start time for uptime calculation. */
+let serverStartTime = Date.now();
+
+/** Request timeout in ms (default 30s, configurable via VINEXT_REQUEST_TIMEOUT). */
+const REQUEST_TIMEOUT = parseInt(process.env.VINEXT_REQUEST_TIMEOUT || "30000", 10);
+
+/**
+ * Handle the /_health endpoint.
+ * Returns JSON with server status, uptime, and memory usage.
+ */
+function handleHealthCheck(res: ServerResponse, routerType: string): void {
+  const mem = process.memoryUsage();
+  const body = JSON.stringify({
+    status: "ok",
+    uptime: Math.floor((Date.now() - serverStartTime) / 1000),
+    router: routerType,
+    memory: {
+      rss: Math.round(mem.rss / 1024 / 1024),
+      heapUsed: Math.round(mem.heapUsed / 1024 / 1024),
+      heapTotal: Math.round(mem.heapTotal / 1024 / 1024),
+    },
+    timestamp: new Date().toISOString(),
+  });
+  res.writeHead(200, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+  });
+  res.end(body);
+}
+
+/**
+ * Register graceful shutdown handlers for a server.
+ * On SIGTERM/SIGINT, stop accepting new connections, wait for
+ * in-flight requests to drain, then exit.
+ */
+function registerGracefulShutdown(server: import("node:http").Server, routerType: string): void {
+  let isShuttingDown = false;
+
+  const shutdown = (signal: string) => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`[\x1b[36mTichPhong OS\x1b[0m] ${signal} received. Graceful shutdown starting...`);
+
+    // Stop accepting new connections
+    server.close(() => {
+      console.log(`[\x1b[36mTichPhong OS\x1b[0m] All connections drained. ${routerType} server shut down cleanly.`);
+      process.exit(0);
+    });
+
+    // Force shutdown after 10 seconds if connections don't drain
+    setTimeout(() => {
+      console.warn(`[\x1b[36mTichPhong OS\x1b[0m] Force shutdown after timeout.`);
+      process.exit(1);
+    }, 10_000).unref();
+  };
+
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  process.on("SIGINT", () => shutdown("SIGINT"));
 }
 
 /** Content types that benefit from compression. */
@@ -414,7 +486,7 @@ export async function startProdServer(options: ProdServerOptions = {}) {
 
   const {
     port = process.env.PORT ? parseInt(process.env.PORT) : 3000,
-    host = "0.0.0.0",
+    hostname = "0.0.0.0",
     outDir = path.resolve("dist"),
     noCompression = false,
   } = options;
@@ -436,17 +508,17 @@ export async function startProdServer(options: ProdServerOptions = {}) {
   }
 
   if (isAppRouter) {
-    return startAppRouterServer({ port, host, clientDir, rscEntryPath, compress });
+    return startAppRouterServer({ port, hostname, clientDir, rscEntryPath, compress });
   }
 
-  return startPagesRouterServer({ port, host, clientDir, serverEntryPath, compress });
+  return startPagesRouterServer({ port, hostname, clientDir, serverEntryPath, compress });
 }
 
 // ─── App Router Production Server ─────────────────────────────────────────────
 
 interface AppRouterServerOptions {
   port: number;
-  host: string;
+  hostname: string;
   clientDir: string;
   rscEntryPath: string;
   compress: boolean;
@@ -469,7 +541,7 @@ interface AppRouterServerOptions {
  * 4. Stream the Web Response back (with optional compression)
  */
 async function startAppRouterServer(options: AppRouterServerOptions) {
-  const { port, host, clientDir, rscEntryPath, compress } = options;
+  const { port, hostname, clientDir, rscEntryPath, compress } = options;
 
   // Import the RSC handler (use file:// URL for reliable dynamic import)
   const rscModule = await import(pathToFileURL(rscEntryPath).href);
@@ -481,7 +553,16 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
   }
 
   const server = createServer(async (req, res) => {
+    // Request timeout protection
+    res.setTimeout(REQUEST_TIMEOUT, () => {
+      if (!res.headersSent) {
+        res.writeHead(504);
+        res.end("Gateway Timeout");
+      }
+    });
+
     const url = req.url ?? "/";
+    const requestStart = Date.now();
     // Normalize backslashes (browsers treat /\ as //), then decode and normalize path.
     const rawPathname = url.split("?")[0].replaceAll("\\", "/");
     let pathname: string;
@@ -502,6 +583,61 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
       return;
     }
 
+    // Health check endpoint
+    if (pathname === "/_health") {
+      handleHealthCheck(res, "app");
+      return;
+    }
+
+    // Metrics endpoint
+    if (pathname === "/_metrics") {
+      const body = JSON.stringify(metrics.getReport(), null, 2);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(body);
+      return;
+    }
+
+    // Admin dashboard
+    if (pathname === "/_admin") {
+      handleAdminDashboard(res);
+      return;
+    }
+
+    // SEO: auto-serve sitemap.xml
+    if (pathname === "/sitemap.xml") {
+      const siteUrl = process.env.SITE_URL ?? `http://localhost:${options.port}`;
+      const xml = generateSitemap([], { siteUrl });
+      res.writeHead(200, { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" });
+      res.end(xml);
+      return;
+    }
+
+    // SEO: auto-serve robots.txt
+    if (pathname === "/robots.txt") {
+      const siteUrl = process.env.SITE_URL ?? `http://localhost:${options.port}`;
+      const txt = generateRobotsTxt({ siteUrl });
+      res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "public, max-age=3600" });
+      res.end(txt);
+      return;
+    }
+
+    // PWA: auto-serve manifest.json
+    if (pathname === "/manifest.json") {
+      const name = process.env.APP_NAME ?? "Vinext App";
+      const json = generateManifest({ name, themeColor: process.env.THEME_COLOR ?? "#000000" });
+      res.writeHead(200, { "Content-Type": "application/manifest+json", "Cache-Control": "public, max-age=86400" });
+      res.end(json);
+      return;
+    }
+
+    // PWA: auto-serve service worker
+    if (pathname === "/sw.js") {
+      const js = generateServiceWorker();
+      res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-cache", "Service-Worker-Allowed": "/" });
+      res.end(js);
+      return;
+    }
+
     // Serve static assets from client build
     if (pathname !== "/" && tryServeStatic(req, res, clientDir, pathname, compress)) {
       return;
@@ -510,6 +646,17 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     // Image optimization passthrough (Node.js prod server has no Images binding;
     // serves the original file with cache headers and security headers)
     if (pathname === IMAGE_OPTIMIZATION_PATH) {
+      // Rate limit image optimization requests to prevent abuse
+      const clientIp = getClientIP(req.headers as Record<string, string | string[] | undefined>);
+      const rateResult = checkRateLimit(clientIp);
+      if (!rateResult.allowed) {
+        res.writeHead(429, {
+          "Retry-After": String(Math.ceil(rateResult.retryAfterMs / 1000)),
+        });
+        res.end("Too Many Requests");
+        return;
+      }
+
       const parsedUrl = new URL(url, "http://localhost");
       const defaultAllowedWidths = [...DEFAULT_DEVICE_SIZES, ...DEFAULT_IMAGE_SIZES];
       const params = parseImageParams(parsedUrl, defaultAllowedWidths);
@@ -542,14 +689,21 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     }
 
     try {
+      // Apply security headers to dynamic responses
+      for (const [hName, hValue] of Object.entries(securityHeaders)) {
+        res.setHeader(hName, hValue);
+      }
+
       // Convert Node.js request to Web Request and call the RSC handler
       const request = nodeToWebRequest(req);
       const response = await rscHandler(request);
 
       // Stream the Web Response back to the Node.js response
       await sendWebResponse(response, req, res, compress);
+      metrics.recordRequest(pathname, response.status, Date.now() - requestStart);
     } catch (e) {
       console.error("[\x1b[36mTichPhong OS\x1b[0m] Server error:", e);
+      metrics.recordRequest(pathname, 500, Date.now() - requestStart);
       if (!res.headersSent) {
         res.writeHead(500);
         res.end("Internal Server Error");
@@ -557,11 +711,14 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
     }
   });
 
+  registerGracefulShutdown(server, "App Router");
+  serverStartTime = Date.now();
+
   await new Promise<void>((resolve) => {
-    server.listen(port, host, () => {
+    server.listen(port, hostname, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${host}:${actualPort}`);
+      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${hostname}:${actualPort}`);
       resolve();
     });
   });
@@ -573,7 +730,7 @@ async function startAppRouterServer(options: AppRouterServerOptions) {
 
 interface PagesRouterServerOptions {
   port: number;
-  host: string;
+  hostname: string;
   clientDir: string;
   serverEntryPath: string;
   compress: boolean;
@@ -589,7 +746,7 @@ interface PagesRouterServerOptions {
  * - vinextConfig — embedded next.config.js settings
  */
 async function startPagesRouterServer(options: PagesRouterServerOptions) {
-  const { port, host, clientDir, serverEntryPath, compress } = options;
+  const { port, hostname, clientDir, serverEntryPath, compress } = options;
 
   // Load the SSR manifest (maps module URLs to client asset URLs)
   let ssrManifest: Record<string, string[]> = {};
@@ -629,7 +786,16 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
   ];
 
   const server = createServer(async (req, res) => {
+    // Request timeout protection
+    res.setTimeout(REQUEST_TIMEOUT, () => {
+      if (!res.headersSent) {
+        res.writeHead(504);
+        res.end("Gateway Timeout");
+      }
+    });
+
     const rawUrl = req.url ?? "/";
+    const requestStart = Date.now();
     // Normalize backslashes (browsers treat /\ as //), then decode and normalize path.
     // Rebuild `url` from the decoded pathname + original query string so all
     // downstream consumers (resolvedUrl, resolvedPathname, config matchers)
@@ -670,8 +836,72 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       return;
     }
 
+    // Health check endpoint
+    if (pathname === "/_health" || staticLookupPath === "/_health") {
+      handleHealthCheck(res, "pages");
+      return;
+    }
+
+    // Metrics endpoint
+    if (pathname === "/_metrics" || staticLookupPath === "/_metrics") {
+      const body = JSON.stringify(metrics.getReport(), null, 2);
+      res.writeHead(200, { "Content-Type": "application/json", "Cache-Control": "no-store" });
+      res.end(body);
+      return;
+    }
+
+    // Admin dashboard
+    if (pathname === "/_admin" || staticLookupPath === "/_admin") {
+      handleAdminDashboard(res);
+      return;
+    }
+
+    // SEO: auto-serve sitemap.xml
+    if (pathname === "/sitemap.xml" || staticLookupPath === "/sitemap.xml") {
+      const siteUrl = process.env.SITE_URL ?? `http://localhost:${options.port}`;
+      const xml = generateSitemap([], { siteUrl });
+      res.writeHead(200, { "Content-Type": "application/xml", "Cache-Control": "public, max-age=3600" });
+      res.end(xml);
+      return;
+    }
+
+    // SEO: auto-serve robots.txt
+    if (pathname === "/robots.txt" || staticLookupPath === "/robots.txt") {
+      const siteUrl = process.env.SITE_URL ?? `http://localhost:${options.port}`;
+      const txt = generateRobotsTxt({ siteUrl });
+      res.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "public, max-age=3600" });
+      res.end(txt);
+      return;
+    }
+
+    // PWA: auto-serve manifest.json
+    if (pathname === "/manifest.json" || staticLookupPath === "/manifest.json") {
+      const name = process.env.APP_NAME ?? "Vinext App";
+      const json = generateManifest({ name, themeColor: process.env.THEME_COLOR ?? "#000000" });
+      res.writeHead(200, { "Content-Type": "application/manifest+json", "Cache-Control": "public, max-age=86400" });
+      res.end(json);
+      return;
+    }
+
+    // PWA: auto-serve service worker
+    if (pathname === "/sw.js" || staticLookupPath === "/sw.js") {
+      const js = generateServiceWorker();
+      res.writeHead(200, { "Content-Type": "application/javascript", "Cache-Control": "no-cache", "Service-Worker-Allowed": "/" });
+      res.end(js);
+      return;
+    }
+
     // ── Image optimization passthrough ──────────────────────────────
     if (pathname === IMAGE_OPTIMIZATION_PATH || staticLookupPath === IMAGE_OPTIMIZATION_PATH) {
+      // Rate limit image optimization requests
+      const clientIp = getClientIP(req.headers as Record<string, string | string[] | undefined>);
+      const rateResult = checkRateLimit(clientIp);
+      if (!rateResult.allowed) {
+        res.writeHead(429, { "Retry-After": String(Math.ceil(rateResult.retryAfterMs / 1000)) });
+        res.end("Too Many Requests");
+        return;
+      }
+
       const parsedUrl = new URL(rawUrl, "http://localhost");
       const params = parseImageParams(parsedUrl, allowedImageWidths);
       if (!params) {
@@ -688,9 +918,9 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         return;
       }
       const imageSecurityHeaders: Record<string, string> = {
-        "Content-Security-Policy": IMAGE_CONTENT_SECURITY_POLICY,
+        "Content-Security-Policy": vinextConfig?.images?.contentSecurityPolicy || IMAGE_CONTENT_SECURITY_POLICY,
         "X-Content-Type-Options": "nosniff",
-        "Content-Disposition": "inline",
+        "Content-Disposition": vinextConfig?.images?.contentDispositionType === "attachment" ? "attachment" : "inline",
       };
       if (tryServeStatic(req, res, clientDir, params.imageUrl, false, imageSecurityHeaders)) {
         return;
@@ -730,7 +960,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
         ? (req.headers["x-forwarded-proto"] as string)?.split(",")[0]?.trim()
         : undefined;
       const protocol = rawProtocol === "https" || rawProtocol === "http" ? rawProtocol : "http";
-      const hostHeader = resolveHost(req, `${host}:${port}`);
+      const hostHeader = resolveHost(req, `${hostname}:${port}`);
       const reqHeaders = Object.entries(req.headers).reduce((h, [k, v]) => {
         if (v) h.set(k, Array.isArray(v) ? v.join(", ") : v);
         return h;
@@ -830,7 +1060,7 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
 
       // ── 5. Apply custom headers from next.config.js ───────────────
       if (configHeaders.length) {
-        const matched = matchHeaders(resolvedPathname, configHeaders);
+        const matched = matchHeaders(resolvedPathname, configHeaders, reqCtx);
         for (const h of matched) {
           middlewareHeaders[h.key.toLowerCase()] = h.value;
         }
@@ -898,6 +1128,12 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
           }
           resolvedUrl = rewritten;
           resolvedPathname = rewritten.split("?")[0];
+          // If the rewritten path has a file extension, it may point to a static
+          // file in public/ (copied to clientDir during build). Try to serve it
+          // directly before falling through to SSR (which would return 404).
+          if (resolvedPathname.includes(".") && tryServeStatic(req, res, clientDir, resolvedPathname, compress)) {
+            return;
+          }
         }
       }
 
@@ -915,6 +1151,11 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
               await sendWebResponse(proxyResponse, req, res, compress);
               return;
             }
+            // Check if fallback targets a static file in public/
+            const fallbackPathname = fallbackRewrite.split("?")[0];
+            if (fallbackPathname.includes(".") && tryServeStatic(req, res, clientDir, fallbackPathname, compress)) {
+              return;
+            }
             response = await renderPage(webRequest, fallbackRewrite, ssrManifest);
           }
         }
@@ -929,22 +1170,27 @@ async function startPagesRouterServer(options: PagesRouterServerOptions) {
       // Merge middleware + config headers into the response
       const responseBody = Buffer.from(await response.arrayBuffer());
       const ct = response.headers.get("content-type") ?? "text/html";
-      const responseHeaders: Record<string, string> = { ...middlewareHeaders };
+      const responseHeaders: Record<string, string> = { ...securityHeaders, ...middlewareHeaders };
       response.headers.forEach((v, k) => { responseHeaders[k] = v; });
 
       sendCompressed(req, res, responseBody, ct, middlewareRewriteStatus ?? response.status, responseHeaders, compress);
+      metrics.recordRequest(pathname, middlewareRewriteStatus ?? response.status, Date.now() - requestStart);
     } catch (e) {
       console.error("[\x1b[36mTichPhong OS\x1b[0m] Server error:", e);
+      metrics.recordRequest(pathname, 500, Date.now() - requestStart);
       res.writeHead(500);
       res.end("Internal Server Error");
     }
   });
 
+  registerGracefulShutdown(server, "Pages Router");
+  serverStartTime = Date.now();
+
   await new Promise<void>((resolve) => {
-    server.listen(port, host, () => {
+    server.listen(port, hostname, () => {
       const addr = server.address();
       const actualPort = typeof addr === "object" && addr ? addr.port : port;
-      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${host}:${actualPort}`);
+      console.log(`[\x1b[36mTichPhong OS\x1b[0m] Production server running at http://${hostname}:${actualPort}`);
       resolve();
     });
   });

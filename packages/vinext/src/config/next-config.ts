@@ -102,6 +102,12 @@ export interface NextConfig {
     deviceSizes?: number[];
     /** Allowed image sizes for fixed-width images. Defaults to Next.js defaults: [16, 32, 48, 64, 96, 128, 256, 384] */
     imageSizes?: number[];
+    /** Allows rendering remote SVG images (Next.js default: false) */
+    dangerouslyAllowSVG?: boolean;
+    /** Enforces content disposition type for images (Next.js default: "attachment" if dangerouslyAllowSVG is true, otherwise "inline") */
+    contentDispositionType?: "inline" | "attachment";
+    /** Applies a Content-Security-Policy header to optimized images (useful for restricting SVG script execution) */
+    contentSecurityPolicy?: string;
   };
   /** Build output mode: 'export' for full static export, 'standalone' for single server */
   output?: "export" | "standalone";
